@@ -406,13 +406,23 @@ fn find_app_by_name(name: &str, folders: &[String]) -> Option<PathBuf> {
         let apps = apios_core::platform::adapter().discover_installed_apps();
         let lower = name.to_lowercase();
         // 精确匹配优先；否则前缀匹配（注册表 DisplayName 常带版本号，
-        // 如 "7-Zip 26.01 (x64)" → 输入 "7-Zip" 命中），多命中取最短名
+        // 如 "7-Zip 26.01 (x64)" → 输入 "7-Zip" 命中）。多命中排序：
+        // 注册表主条目（path 非 .lnk）优先于开始菜单 .lnk（Help/卸载等杂项），
+        // 同源按名称最短取最接近的
         apps.iter()
             .find(|a| a.app_name.to_lowercase() == lower)
             .or_else(|| {
-                apps.iter()
+                let mut hits: Vec<&AppInfo> = apps
+                    .iter()
                     .filter(|a| a.app_name.to_lowercase().starts_with(&lower))
-                    .min_by_key(|a| a.app_name.len())
+                    .collect();
+                if hits.is_empty() {
+                    return None;
+                }
+                hits.sort_by_key(|a| {
+                    (a.path.to_string_lossy().ends_with(".lnk"), a.app_name.len())
+                });
+                hits.into_iter().next()
             })
             .map(|a| a.path.clone())
     }
