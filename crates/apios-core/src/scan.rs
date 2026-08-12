@@ -11,13 +11,29 @@ use crate::model::AppInfo;
 /// 清理器自身 bundle id（原版 Pearcleaner；重写后 GUI 化时替换为 ApiosCleaner 实际 id）
 const SELF_BUNDLE_ID: &str = "com.alienator88.Pearcleaner";
 
-/// 默认应用扫描文件夹（原版 FolderSettingsManager 默认值）
+/// 默认应用扫描文件夹（原版 FolderSettingsManager 默认值）。
+/// macOS：.app bundle 目录三件套；其他平台：XDG 形态（Linux 应用为 .desktop
+/// 文件，desktop 解析属适配器 TODO —— 这里目录先取对，避免误导性查找路径）。
 pub fn default_app_folders(home: &str) -> Vec<String> {
-    vec![
-        format!("{home}/Applications"),
-        "/Applications".to_string(),
-        "/Users/Shared/Applications".to_string(),
-    ]
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            format!("{home}/Applications"),
+            "/Applications".to_string(),
+            "/Users/Shared/Applications".to_string(),
+        ]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        vec![
+            format!("{home}/Applications"),
+            format!("{home}/.local/share/applications"),
+            "/usr/local/share/applications".to_string(),
+            "/usr/share/applications".to_string(),
+            format!("{home}/.local/share/flatpak/exports/share/applications"),
+            format!("{home}/.var/app"),
+        ]
+    }
 }
 
 /// 受限应用（原版 isRestricted：Safari / self / /Applications/Utilities）
@@ -93,7 +109,8 @@ mod tests {
     fn test_default_folders() {
         let home = crate::platform::adapter().home();
         let folders = default_app_folders(&home);
-        assert_eq!(folders.len(), 3);
-        assert!(folders[1].ends_with("/Applications"));
+        assert!(!folders.is_empty());
+        // 首项恒为 {home}/Applications（macOS 与 XDG 形态一致）
+        assert!(folders[0].ends_with("/Applications"));
     }
 }
