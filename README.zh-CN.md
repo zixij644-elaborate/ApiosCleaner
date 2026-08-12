@@ -94,7 +94,9 @@ apios uninstall SomeApp
 # 列出已卸载应用留下的孤儿文件（只读）
 apios orphan
 
-# 删除所有孤儿文件
+# 删除孤儿文件——候选按编号列出，输入要删的编号（如 "1,3-5"）、
+# 'a' 全删或直接回车取消。只移动选中的文件，故意的残留
+# （游戏存档目录等）可以保留。-y 跳过选择直接全删（脚本用）。
 apios clean-orphan
 
 # 查看开发环境缓存大小（只读）
@@ -143,7 +145,8 @@ apios lipo thin --sign Firefox
 ——Windows 上没有 `bundle_identifier`，匹配会回退到显示名/路径关键字。
 
 ```sh
-# list / uninstall / orphan 与 macOS 用法一致（删除走回收站）
+# list / uninstall / orphan / clean-orphan 与 macOS 用法一致（删除走回收站；
+# clean-orphan 的编号选择交互在 Windows 同样生效）
 
 # 包管理器：winget（无 formula/cask 之分）
 apios pkg winget list

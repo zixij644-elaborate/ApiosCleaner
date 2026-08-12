@@ -4,7 +4,7 @@
 //!   apios list <app>         列出应用相关文件（只读，不删除）
 //!   apios uninstall <app>    卸载：应用本体 + 全部相关文件 → 回收站（交互确认）
 //!   apios orphan             列出孤儿文件（只读，不删除）
-//!   apios clean-orphan       删除全部孤儿文件（交互确认）
+//!   apios clean-orphan       删除孤儿文件（编号交互选择；'a' 全删）
 //!   apios dev-clean [env]    列出开发环境缓存；带 <env> 则清理（交互确认）
 //!   apios pkg <pm> <action>  包管理器：卸载包本体 + 依赖处理（brew 为当前实现）
 //!   apios plugins [类别]     列出插件（18 类：音频/偏好面板/QuickLook 等）
@@ -100,7 +100,7 @@ dev caches, winget\n  \
 apios list Firefox                    List everything Firefox leaves behind\n  \
 apios uninstall Firefox               Move Firefox + all its files to the Trash\n  \
 apios orphan                          Show orphans from uninstalled apps\n  \
-apios clean-orphan                    Delete them (after confirmation)\n  \
+apios clean-orphan                    Select which orphans to delete (or 'a' for all)\n  \
 apios dev-clean cargo                 Show/clean the Cargo cache\n  \
 apios pkg brew uninstall git          Uninstall a Homebrew package\n  \
 apios plugins --clean audio           Delete audio plugins\n  \
@@ -164,11 +164,16 @@ Live apps are never listed — if an app is found again later, its files stop be
 orphans."
     )]
     Orphan,
-    /// Delete all orphaned files (asks for confirmation)
+    /// Delete orphaned files — choose which ones interactively (or all with 'a')
     #[command(
-        long_about = "Delete all orphaned files (after confirmation). Same safety model as \
-uninstall: files move to the Trash/Recycle Bin, never permanent; critical system paths \
-are protected."
+        long_about = "Delete orphaned files, chosen from a numbered list. Every item is \
+printed with an index; type numbers to select (e.g. \"1,3-5\"), 'a' for all, or Enter \
+to cancel. Only the selected files are moved — useful when some candidates are \
+deliberate leftovers (e.g. a game's save folder).\n\n\
+Same safety model as uninstall: files move to the Trash/Recycle Bin, never permanent; \
+critical system paths are protected.\n\n\
+With -y, everything is deleted without prompting (scripting). Without an interactive \
+terminal and without -y, the command refuses to run."
     )]
     CleanOrphan,
     /// List dev environment caches (read-only); with <env>, clean it
@@ -1375,6 +1380,82 @@ fn cmd_orphan(cli: &Cli) {
     println!("\nFound {} orphaned files.\n", found.len());
 }
 
+/// 解析用户的选择输入："1,3-5" → 去重排序后的 1-based 编号列表。
+/// 空串 → Ok(空)（上层视为取消）；"a"/"all" → Ok((1..=count))。
+/// 非法格式/越界 → Err(原因)。
+fn parse_selection(input: &str, count: usize) -> Result<Vec<usize>, String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(Vec::new());
+    }
+    if input.eq_ignore_ascii_case("a") || input.eq_ignore_ascii_case("all") {
+        return Ok((1..=count).collect());
+    }
+    let mut selected: Vec<usize> = Vec::new();
+    for token in input.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            return Err(format!("empty entry in \"{input}\""));
+        }
+        let parts: Vec<&str> = token.split('-').collect();
+        let (start, end) = match parts.as_slice() {
+            [one] => (one, one),
+            [s, e] => (s, e),
+            _ => return Err(format!("bad range \"{token}\"")),
+        };
+        let start: usize = start
+            .trim()
+            .parse()
+            .map_err(|_| format!("not a number: \"{start}\""))?;
+        let end: usize = end
+            .trim()
+            .parse()
+            .map_err(|_| format!("not a number: \"{end}\""))?;
+        if start == 0 || end == 0 || start > end {
+            return Err(format!("bad range \"{token}\" (must be 1..={count})"));
+        }
+        if end > count {
+            return Err(format!("number {end} out of range (1..={count})"));
+        }
+        selected.extend(start..=end);
+    }
+    selected.sort_unstable();
+    selected.dedup();
+    Ok(selected)
+}
+
+/// 交互式选择要删除的孤儿文件，返回选中的子集。
+/// `-y` → 全部；非 TTY（且无 -y）→ 拒绝退出；TTY → 编号选择（空输入 = 取消）。
+fn select_orphans(cli: &Cli, found: &[PathBuf]) -> Vec<PathBuf> {
+    if cli.yes {
+        return found.to_vec();
+    }
+    if !io::stdin().is_terminal() {
+        eprintln!("apios: no interactive terminal — re-run with -y to delete all.");
+        exit(1);
+    }
+    println!("\nFound {} orphaned files:", found.len());
+    for (i, p) in found.iter().enumerate() {
+        println!("  {:>3}. {}", i + 1, p.display());
+    }
+    loop {
+        print!("\nEnter numbers to delete (1,3-5), 'a' for all, Enter to cancel: ");
+        let _ = io::stdout().flush();
+        let mut line = String::new();
+        if io::stdin().read_line(&mut line).is_err() {
+            return Vec::new();
+        }
+        match parse_selection(&line, found.len()) {
+            Ok(sel) if sel.is_empty() => {
+                println!("Aborted — nothing was deleted.");
+                return Vec::new();
+            }
+            Ok(sel) => return sel.into_iter().map(|i| found[i - 1].clone()).collect(),
+            Err(msg) => eprintln!("apios: {msg}"),
+        }
+    }
+}
+
 fn cmd_clean_orphan(cli: &Cli) {
     let found = find_orphans();
 
@@ -1385,17 +1466,18 @@ fn cmd_clean_orphan(cli: &Cli) {
 
     check_protected(&found, "apios clean-orphan");
 
-    println!(
-        "{} orphaned files will be moved to {}:",
-        found.len(),
-        trash_label()
-    );
-    if !confirm(cli, &format!("Delete {} files? ", found.len())) {
-        println!("Aborted — nothing was deleted.");
+    let selected = select_orphans(cli, &found);
+    if selected.is_empty() {
         return;
     }
 
-    let result = delete_files(&found, Some("Orphaned"));
+    println!(
+        "{} orphaned file(s) will be moved to {}:",
+        selected.len(),
+        trash_label()
+    );
+
+    let result = delete_files(&selected, Some("Orphaned"));
     if result.success {
         println!(
             "\n{}",
@@ -1422,6 +1504,56 @@ fn cmd_clean_orphan(cli: &Cli) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_selection_empty_is_cancel() {
+        assert_eq!(parse_selection("", 10).unwrap(), Vec::<usize>::new());
+        assert_eq!(parse_selection("   ", 10).unwrap(), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn test_parse_selection_all() {
+        assert_eq!(parse_selection("a", 3).unwrap(), vec![1, 2, 3]);
+        assert_eq!(parse_selection("all", 3).unwrap(), vec![1, 2, 3]);
+        assert_eq!(parse_selection("ALL", 3).unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_parse_selection_single_and_ranges() {
+        assert_eq!(parse_selection("1", 10).unwrap(), vec![1]);
+        assert_eq!(parse_selection("10", 10).unwrap(), vec![10]);
+        assert_eq!(parse_selection("1,3,5", 10).unwrap(), vec![1, 3, 5]);
+        assert_eq!(parse_selection("2-4", 10).unwrap(), vec![2, 3, 4]);
+        assert_eq!(parse_selection("1,3-5,8", 10).unwrap(), vec![1, 3, 4, 5, 8]);
+        assert_eq!(parse_selection(" 1 , 3-5 ", 10).unwrap(), vec![1, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_parse_selection_dedup_and_sort() {
+        // 乱序 + 重复 → 去重排序
+        assert_eq!(parse_selection("5,3,3-4,1", 10).unwrap(), vec![1, 3, 4, 5]);
+        // 反转范围（start > end）→ 报错
+        assert!(parse_selection("4-2", 10).is_err());
+    }
+
+    #[test]
+    fn test_parse_selection_out_of_range() {
+        assert!(parse_selection("11", 10).is_err());
+        assert!(parse_selection("2-11", 10).is_err());
+        assert!(parse_selection("0", 10).is_err());
+        assert!(parse_selection("1-0", 10).is_err());
+        assert!(parse_selection("0-2", 10).is_err());
+    }
+
+    #[test]
+    fn test_parse_selection_garbage() {
+        assert!(parse_selection("x", 10).is_err());
+        assert!(parse_selection("1,,2", 10).is_err());
+        assert!(parse_selection("1,", 10).is_err());
+        assert!(parse_selection("1-2-3", 10).is_err());
+        assert!(parse_selection("1.5", 10).is_err());
+        assert!(parse_selection("-", 10).is_err());
+    }
 
     #[test]
     fn test_arg_is_path() {

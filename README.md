@@ -102,7 +102,10 @@ apios uninstall SomeApp
 # List orphaned files left behind by uninstalled apps (read-only)
 apios orphan
 
-# Delete all orphaned files
+# Delete orphaned files — candidates are listed with numbers; type the ones to
+# delete (e.g. "1,3-5"), 'a' for all, or Enter to cancel. Only the selected
+# files are moved, so deliberate leftovers (a game's save folder, …) can be kept.
+# -y deletes everything without prompting (scripting).
 apios clean-orphan
 
 # List dev environment cache sizes (read-only)
@@ -152,7 +155,8 @@ installer path, or a `.lnk` path — `bundle_identifier` does not exist on
 Windows, so matching falls back to display-name / path needles.
 
 ```sh
-# list / uninstall / orphan work as on macOS (deletion goes to the Recycle Bin)
+# list / uninstall / orphan / clean-orphan work as on macOS (deletion goes to
+# the Recycle Bin; clean-orphan's interactive selection works the same)
 
 # Package manager category: winget (no formula/cask distinction)
 apios pkg winget list

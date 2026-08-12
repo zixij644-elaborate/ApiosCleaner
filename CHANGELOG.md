@@ -5,6 +5,20 @@ All notable changes to ApiosCleaner are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`clean-orphan` interactive selection** — candidates are listed with
+  numbers; type `1,3-5` (single numbers and ranges), `a`/`all`, or Enter to
+  cancel. Only the selected files are moved, so deliberate leftovers (a
+  game's save folder, …) are kept. `-y` preserves the old "delete
+  everything" behavior for scripting; without an interactive terminal the
+  command refuses unless `-y` is given. Ten new unit tests cover the
+  selection parser (ranges, dedup, out-of-range, garbage input).
+- **Planned, not yet implemented**: filtering by name/path arguments
+  (`apios clean-orphan <name>`) for scripted selective deletion.
+
 ## [0.2.0] - 2026-08-12
 
 Windows port: the adapter layer grows a first-class Windows implementation
