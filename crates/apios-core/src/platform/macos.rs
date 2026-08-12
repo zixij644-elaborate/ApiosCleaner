@@ -464,6 +464,14 @@ fn dev_envs_table() -> Vec<DevEnv> {
             name: "Gradle".into(),
             paths: vec![p("~/.gradle/caches/"), p("~/.gradle/wrapper/")],
         },
+        // brew 缓存/日志（可再生，原版 runCleanup 缓存部分；卸载包本体归 `pkg brew`）
+        DevEnv {
+            name: "Homebrew".into(),
+            paths: vec![
+                p("~/Library/Caches/Homebrew/"),
+                p("~/Library/Logs/Homebrew/"),
+            ],
+        },
         DevEnv {
             name: "Haskell Stack".into(),
             paths: vec![p("~/.stack/snapshots/")],
@@ -708,7 +716,7 @@ mod tests {
     fn test_dev_envs_tightened() {
         // 收紧验证：不列工具本体 / 系统包存储 / 配置 / 用户数据
         let envs = dev_envs_table();
-        assert_eq!(envs.len(), 24); // 原版 26 环境，移除 Conda 与 Ruby Gems
+        assert_eq!(envs.len(), 25); // 原版 26 环境，移除 Conda 与 Ruby Gems；+Homebrew 缓存（2026-08-12）
         let all: Vec<&str> = envs
             .iter()
             .flat_map(|e| e.paths.iter().map(|p| p.as_str()))

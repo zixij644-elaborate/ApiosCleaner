@@ -29,8 +29,8 @@ core can ship as per-OS builds, each tuned for its platform.
 
 | Area | State |
 |---|---|
-| Core engine (scan/match/orphan/trash) | ✅ implemented + unit tested (32/32) |
-| CLI (`list` / `uninstall` / `orphan` / `clean-orphan`) | ✅ works on macOS, output verified against the reference implementation |
+| Core engine (scan/match/orphan/trash) | ✅ implemented + unit tested |
+| CLI (`list` / `uninstall` / `orphan` / `clean-orphan` / `dev-clean` / `pkg`) | ✅ works on macOS, output verified against the reference implementation |
 | Platform adapters | ⚠️ macOS: paths / app metadata / trash in place; Linux, Windows: ⬜ planned |
 | Verification | ✅ 9/9 and 17/17 file sets identical on test apps |
 | UI | ⬜ planned |
@@ -67,6 +67,17 @@ commands ask for confirmation (`y/N`, default no); pass `-y` to skip it
 
 # Clean one dev environment (e.g. Cargo, Gradle, Xcode), or "all"
 ./target/release/apios dev-clean cargo
+
+# Package manager category (Homebrew on macOS): list installed packages
+./target/release/apios pkg brew list
+
+# Uninstall one package (type auto-detected; warns about dependents first;
+# --zap additionally removes cask user config, with extra confirmation)
+./target/release/apios pkg brew uninstall git
+./target/release/apios pkg brew uninstall --zap firefox
+
+# Remove orphaned dependencies (dry-run is shown before confirmation)
+./target/release/apios pkg brew autoremove
 ```
 
 ## License

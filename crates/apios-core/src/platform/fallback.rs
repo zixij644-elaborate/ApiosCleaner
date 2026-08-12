@@ -8,7 +8,10 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{AppMetadata, DevEnvPaths, ProcessControl, SpotlightIndex, SystemPaths, Trash};
+use super::{
+    AppMetadata, DevEnvPaths, PackageManager, PackageManagers, ProcessControl, SpotlightIndex,
+    SystemPaths, Trash,
+};
 use crate::dev_env::DevEnv;
 use crate::model::{AppInfo, Sensitivity};
 
@@ -209,6 +212,13 @@ fn dev_envs_table() -> Vec<DevEnv> {
 impl DevEnvPaths for FallbackAdapter {
     fn dev_envs(&self) -> Vec<DevEnv> {
         dev_envs_table()
+    }
+}
+
+/// 尚无包管理器实现（TODO: Linux apt/dnf/pacman、Windows winget/choco —— 平台专业适配）
+impl PackageManagers for FallbackAdapter {
+    fn package_managers(&self) -> Vec<Box<dyn PackageManager>> {
+        Vec::new()
     }
 }
 

@@ -66,8 +66,48 @@ pub trait DevEnvPaths {
     fn dev_envs(&self) -> Vec<crate::dev_env::DevEnv>;
 }
 
+/// 单个包管理器（`pkg` 命令用；卸载包本体，区别于 dev-clean 的缓存清理）。
+/// 每平台可注册多个（macOS: brew/MacPorts/nix…，Linux: apt/snap/flatpak…），
+/// 故用 `dyn` 集合而非零虚表 cfg 别名 —— 各实现独立 cfg 文件，零跨平台耦合。
+pub trait PackageManager {
+    /// 选择器名（CLI 输入），如 "brew"
+    fn name(&self) -> &str;
+    /// 已安装的某类包列表（name + version + kind）
+    fn list_installed(&self, kind: crate::pkg::PkgKind)
+        -> Result<Vec<crate::pkg::PkgInfo>, String>;
+    /// 依赖该包、且已安装的包（brew: `uses --installed`；公式与 cask 都返回）
+    fn dependents(&self, name: &str, kind: crate::pkg::PkgKind) -> Result<Vec<String>, String>;
+    /// 卸载单个包。ignore_deps=true → 忽略被依赖方（brew: --ignore-dependencies）；
+    /// zap 仅对 cask 生效（删除用户配置，不可恢复）
+    fn uninstall(
+        &self,
+        name: &str,
+        kind: crate::pkg::PkgKind,
+        zap: bool,
+        ignore_deps: bool,
+    ) -> Result<(), String>;
+    /// autoremove 预演（dry-run），返回将卸载的包名（不执行任何删除）
+    fn autoremove_dry_run(&self) -> Result<Vec<String>, String>;
+    /// 真正执行 autoremove（移除仅作为依赖安装、现已无用的包）
+    fn autoremove(&self) -> Result<(), String>;
+}
+
+/// 适配器暴露本平台支持的包管理器（多包管理器入口）
+pub trait PackageManagers {
+    fn package_managers(&self) -> Vec<Box<dyn PackageManager>>;
+
+    /// 按选择器名查找（大小写不敏感）
+    fn package_manager(&self, name: &str) -> Option<Box<dyn PackageManager>> {
+        self.package_managers()
+            .into_iter()
+            .find(|pm| pm.name().eq_ignore_ascii_case(name))
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 mod fallback;
+#[cfg(target_os = "macos")]
+mod homebrew;
 #[cfg(target_os = "macos")]
 mod macos;
 

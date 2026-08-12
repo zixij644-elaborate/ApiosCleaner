@@ -5,6 +5,8 @@
 //!   apios uninstall <app>    卸载：应用本体 + 全部相关文件 → 回收站（交互确认）
 //!   apios orphan             列出孤儿文件（只读，不删除）
 //!   apios clean-orphan       删除全部孤儿文件（交互确认）
+//!   apios dev-clean [env]    列出开发环境缓存；带 <env> 则清理（交互确认）
+//!   apios pkg <pm> <action>  包管理器：卸载包本体 + 依赖处理（brew 为当前实现）
 //!
 //! <app> 参数支持三种形式：
 //!   完整路径      apios uninstall /Applications/Foo.app
@@ -23,7 +25,8 @@ use apios_core::dev_env::{dedup_nested, dir_size, env_sizes, expand_globs, expan
 use apios_core::locations::Locations;
 use apios_core::model::{AppInfo, Sensitivity};
 use apios_core::orphan::ReversePathsSearcher;
-use apios_core::platform::ProcessControl;
+use apios_core::pkg::{detect_kind, PkgKind};
+use apios_core::platform::{PackageManager, PackageManagers, ProcessControl};
 use apios_core::scan::{default_app_folders, get_sorted_apps};
 use apios_core::search::AppPathFinder;
 use apios_core::trash::{delete_files, is_writable};
@@ -64,6 +67,30 @@ enum Command {
         /// Environment name (case-insensitive), or "all" for everything
         env: Option<String>,
     },
+    /// Manage packages installed via a package manager (e.g. Homebrew)
+    Pkg {
+        /// Package manager selector, e.g. "brew"
+        pm: String,
+        #[command(subcommand)]
+        action: PkgAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum PkgAction {
+    /// List installed packages (formulae and casks)
+    List,
+    /// Uninstall one package (formula or cask; type auto-detected)
+    Uninstall {
+        /// Package name as installed, e.g. "git" or "firefox"
+        name: String,
+        /// Casks only: also remove user config and preferences (irreversible;
+        /// asks for extra confirmation; skipped with -y)
+        #[arg(long)]
+        zap: bool,
+    },
+    /// Remove orphaned dependencies (dry-run is shown first; asks for confirmation)
+    Autoremove,
 }
 
 fn main() {
@@ -74,6 +101,7 @@ fn main() {
         Command::Orphan => cmd_orphan(&cli),
         Command::CleanOrphan => cmd_clean_orphan(&cli),
         Command::DevClean { ref env } => cmd_dev_clean(&cli, env.as_deref()),
+        Command::Pkg { ref pm, ref action } => cmd_pkg(&cli, pm, action),
     }
 }
 
@@ -336,6 +364,193 @@ fn cmd_dev_clean(cli: &Cli, env: Option<&str>) {
         eprintln!("\napios: failed to delete files.");
         exit(1);
     }
+}
+
+// ---------- 包管理器（pkg） ----------
+
+fn cmd_pkg(cli: &Cli, pm: &str, action: &PkgAction) {
+    let adapter = apios_core::platform::adapter();
+    let Some(pm_obj) = adapter.package_manager(pm) else {
+        let managers = adapter.package_managers();
+        let names: Vec<&str> = managers.iter().map(|p| p.name()).collect();
+        if names.is_empty() {
+            eprintln!("apios: no package manager support on this platform.");
+        } else {
+            eprintln!(
+                "apios: unknown package manager \"{pm}\". Available: {}",
+                names.join(", ")
+            );
+        }
+        exit(1);
+    };
+    match action {
+        PkgAction::List => cmd_pkg_list(pm_obj.as_ref()),
+        PkgAction::Uninstall { name, zap } => cmd_pkg_uninstall(cli, pm_obj.as_ref(), name, *zap),
+        PkgAction::Autoremove => cmd_pkg_autoremove(cli, pm_obj.as_ref()),
+    }
+}
+
+fn kind_plural(kind: PkgKind) -> &'static str {
+    match kind {
+        PkgKind::Formula => "Formulae",
+        PkgKind::Cask => "Casks",
+    }
+}
+
+fn cmd_pkg_list(pm: &dyn PackageManager) {
+    for kind in [PkgKind::Formula, PkgKind::Cask] {
+        let pkgs = match pm.list_installed(kind) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("apios: {}: {e}", pm.name());
+                exit(1);
+            }
+        };
+        println!("{} ({}):", kind_plural(kind), pkgs.len());
+        if pkgs.is_empty() {
+            println!("  (none)");
+            println!();
+            continue;
+        }
+        let width = pkgs
+            .iter()
+            .map(|p| p.name.chars().count())
+            .max()
+            .unwrap_or(0);
+        for p in &pkgs {
+            println!("  {:width$}  {}", p.name, p.version, width = width);
+        }
+        println!();
+    }
+}
+
+fn cmd_pkg_uninstall(cli: &Cli, pm: &dyn PackageManager, name: &str, zap: bool) {
+    // 1. 种类判定（两表本地查询）
+    let (formulae, casks) = match (
+        pm.list_installed(PkgKind::Formula),
+        pm.list_installed(PkgKind::Cask),
+    ) {
+        (Ok(f), Ok(c)) => (
+            f.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+            c.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+        ),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("apios: {}: {e}", pm.name());
+            exit(1);
+        }
+    };
+    let Some(kind) = detect_kind(name, &formulae, &casks) else {
+        eprintln!(
+            "apios: {}: \"{name}\" is not installed (run `apios pkg {} list`).",
+            pm.name(),
+            pm.name()
+        );
+        exit(1);
+    };
+
+    // 2. --zap 仅对 cask 生效
+    let mut effective_zap = zap;
+    if zap && kind == PkgKind::Formula {
+        eprintln!("apios: warning: --zap only applies to casks; ignoring it.");
+        effective_zap = false;
+    }
+
+    // 3. 被依赖方警告（卸载前）
+    let dependents = match pm.dependents(name, kind) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("apios: {}: {e}", pm.name());
+            exit(1);
+        }
+    };
+    if !dependents.is_empty() {
+        println!(
+            "Warning: {} installed package(s) depend on \"{name}\":",
+            dependents.len()
+        );
+        for d in &dependents {
+            println!("  {d}");
+        }
+        println!("Uninstall will use --ignore-dependencies.");
+    }
+
+    // 4. 主确认
+    if !confirm(cli, &format!("Uninstall {} \"{name}\"? ", kind.as_str())) {
+        println!("Aborted — nothing was deleted.");
+        return;
+    }
+
+    // 5. zap 额外确认（主确认之后才询问）
+    if effective_zap {
+        println!(
+            "WARNING: --zap also removes user config and preferences for \"{name}\" (irreversible)."
+        );
+        if !confirm(cli, "Proceed with --zap? ") {
+            println!("Skipping --zap; uninstalling without it.");
+            effective_zap = false;
+        }
+    }
+
+    // 6. 卸载（有被依赖方时带 --ignore-dependencies）
+    if let Err(e) = pm.uninstall(name, kind, effective_zap, !dependents.is_empty()) {
+        eprintln!("apios: {}: {e}", pm.name());
+        exit(1);
+    }
+    println!("Uninstalled {name}.");
+
+    // 7. 卸载后孤儿依赖提示（brew autoremove -n 预演）
+    match pm.autoremove_dry_run() {
+        Ok(orphans) if !orphans.is_empty() => {
+            println!("\n{} orphaned package(s) detected:", orphans.len());
+            for o in &orphans {
+                println!("  {o}");
+            }
+            if confirm(cli, &format!("Autoremove {} package(s)? ", orphans.len())) {
+                if let Err(e) = pm.autoremove() {
+                    eprintln!("apios: {}: {e}", pm.name());
+                    exit(1);
+                }
+                println!("Autoremoved {} package(s).", orphans.len());
+            } else {
+                println!(
+                    "Hint: run `apios pkg {} autoremove` to remove them.",
+                    pm.name()
+                );
+            }
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("apios: {}: {e}", pm.name());
+            exit(1);
+        }
+    }
+}
+
+fn cmd_pkg_autoremove(cli: &Cli, pm: &dyn PackageManager) {
+    let orphans = match pm.autoremove_dry_run() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("apios: {}: {e}", pm.name());
+            exit(1);
+        }
+    };
+    if orphans.is_empty() {
+        println!("Nothing to autoremove.");
+        return;
+    }
+    println!("Autoremove {} package(s):", orphans.len());
+    for o in &orphans {
+        println!("  {o}");
+    }
+    if !confirm(cli, &format!("Autoremove {} package(s)? ", orphans.len())) {
+        println!("Aborted — nothing was deleted.");
+        return;
+    }
+    if let Err(e) = pm.autoremove() {
+        eprintln!("apios: {}: {e}", pm.name());
+        exit(1);
+    }
+    println!("Autoremoved {} package(s).", orphans.len());
 }
 
 fn fmt_size(bytes: u64) -> String {
