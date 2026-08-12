@@ -87,6 +87,18 @@ The Windows implementation is hand-written FFI only (zero third-party deps):
 - `platform/winget.rs` — the winget CLI wrapper (all packages map to
   `Formula`; no dependents/autoremove concept)
 
+The Windows orphan search derives its needles from the executable paths
+themselves — up to 3 ancestor directory names + the file stem of every
+discovered app (`Tencent\Weixin\Weixin.exe` → `weixin` + `tencent`), threshold
+≥3 chars — instead of relying on display names, which never match vendor
+directory names ("7-Zip 24.09 (x64)" vs "7-Zip"). Structural directory names
+(a 21-entry table: programs/startmenu/programfiles roots, local/roaming/appdata,
+bin/program, microsoft/windows, …) never become needles, and result entries
+whose names match a 15-entry AppData system list, `windows*` prefixes, or known
+shared dirs (`common files`, `msbuild`, `reference assemblies`, `wsl`, …) are
+filtered out — `validate_path` only guards critical *roots*, so this filter is
+what keeps `clean-orphan` away from system components.
+
 ## Engine modules
 
 | Module | Purpose |
@@ -94,7 +106,7 @@ The Windows implementation is hand-written FFI only (zero third-party deps):
 | `scan.rs` | Enumerate installed apps (bundle-identifier reading, symlink-safe dedup, `com.alienator88.Pearcleaner` self-exclusion; macOS/fallback discovery delegates here) |
 | `search.rs` | Find all related files of an app: directory walk with depth rules, vendor-directory fallback, name matching, outliers, final set dedup |
 | `matcher.rs` / `conditions.rs` | Should-skip rules and per-app specific conditions (bundle-id exact matching, include/exclude force lists) |
-| `orphan.rs` | Detect files left behind by uninstalled apps (prebuilt UUID→bundle-id map) |
+| `orphan.rs` | Detect files left behind by uninstalled apps (macOS: prebuilt UUID→bundle-id map; Windows: path-derived needles + system-dir filtering — see above) |
 | `identifiers.rs` | Cached bundle-identifier extraction + normalized-name helpers |
 | `trash.rs` | Move-to-Trash archive semantics + critical-path validation + undo (restore) |
 | `pkg.rs` | Package-manager abstraction and categorization |

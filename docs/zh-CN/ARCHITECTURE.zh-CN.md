@@ -1,6 +1,6 @@
 [English](../ARCHITECTURE.md) | [中文](ARCHITECTURE.zh-CN.md)
 
-<!-- 翻译基准：badfec4（docs: Windows v0.2.0 — CI artifact, README/ARCHITECTURE/CHANGELOG, roadmap (M6)）。英文文档改动后请同步更新译文 -->
+<!-- 翻译基准：31f689c（fix orphan: restore WINDOWS_SYSTEM_DIRS filter）。英文文档改动后请同步更新译文 -->
 
 # 架构
 
@@ -74,6 +74,16 @@ Windows 实现全部为手写 FFI（零第三方依赖）：
 - `platform/win_trash.rs` — `SHFileOperationW` 回收站调用（批量 + 逐文件失败分类）
 - `platform/winget.rs` — winget CLI 包装（所有包映射为 `Formula`；无 dependents/autoremove 概念）
 
+Windows 孤儿搜索的 needle 直接派生自可执行文件路径——每个已发现应用的最多 3 级
+祖先目录名 + 文件 stem（`Tencent\Weixin\Weixin.exe` → `weixin` + `tencent`），
+门槛 ≥3 字符——而不是依赖显示名，后者永远匹配不上供应商目录名
+（"7-Zip 24.09 (x64)" vs "7-Zip"）。结构目录名（21 项表：programs/startmenu/
+programfiles 根、local/roaming/appdata、bin/program、microsoft/windows…）永远
+不会成为 needle；条目名命中文 AppData 系统名单 15 项、`windows*` 前缀或已知
+共享目录（`common files`、`msbuild`、`reference assemblies`、`wsl`…）的结果
+会被过滤掉——`validate_path` 只守护 critical 表*根*，正是这个过滤让
+`clean-orphan` 远离系统组件。
+
 ## 引擎模块
 
 | 模块 | 用途 |
@@ -81,7 +91,7 @@ Windows 实现全部为手写 FFI（零第三方依赖）：
 | `scan.rs` | 枚举已安装应用（bundle identifier 读取、符号链接安全去重、`com.alienator88.Pearcleaner` 自身排除；macOS/fallback 的发现委托到这里） |
 | `search.rs` | 查找应用的全部关联文件：带深度规则的目录遍历、供应商目录回退、名称匹配、离群项、最终集合去重 |
 | `matcher.rs` / `conditions.rs` | 应跳过规则与按应用的特定条件（bundle id 精确匹配、包含/排除强制列表） |
-| `orphan.rs` | 检测已卸载应用留下的文件（预建 UUID→bundle id 映射） |
+| `orphan.rs` | 检测已卸载应用留下的文件（macOS：预建 UUID→bundle id 映射；Windows：path 派生 needle + 系统目录过滤——见上文） |
 | `identifiers.rs` | 缓存 bundle identifier 提取 + 名称归一化辅助 |
 | `trash.rs` | 移入回收站的归档语义 + critical 表（关键路径）校验 + 撤销（恢复） |
 | `pkg.rs` | 包管理器抽象与归类 |

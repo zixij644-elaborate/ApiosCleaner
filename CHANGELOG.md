@@ -50,6 +50,111 @@ Menu, deleting via the system Recycle Bin.
 - Archive folder names sanitize Windows-illegal characters
   (`\ < > " | ? *`) alongside `/` and `:`.
 
+### Added
+
+- **In-app help** — every command documents itself (`apios help <cmd>`,
+  usage lines and per-command notes), including platform-specific behavior
+  on Windows.
+
+### Real-device fixes (Windows)
+
+Bugs found on the first native Windows runs after the port landed:
+
+- **FFI link declarations** — `Reg*W` on `advapi32`, `SHFileOperationW` on
+  `shell32` (the MSVC toolchain requires explicit link libraries).
+- **Registry discovery hardening** — `WOW6432Node` uninstall views are
+  enumerated so 32-bit apps are found; paths are unquoted (`"...\App.exe"`);
+  prefix matching prefers the registry main entry over `.lnk` clutter
+  (Help/Uninstall shortcuts).
+- **`winget list` compatibility** — the parser handles winget v1.29 table
+  output (names with spaces, sparse columns); app-name prefix matching.
+- **CLI cosmetics** — usage line shows `apios` on Windows (not `apios.exe`);
+  the not-found message no longer points at macOS paths.
+- **Recycle Bin edge cases** — a wider NUL-terminated buffer for
+  `SHFileOperationW`; paths that vanished before the call are not counted as
+  moved.
+- **Junction filtering** — orphan search skips system junctions
+  (Application Data / Documents / Templates) that `symlink_metadata` reports.
+
+### Security (audit P0, verified)
+
+- **`uninstall .` can no longer trash the working directory** — the Windows
+  path fallback rejected unless the target looks like an app.
+- **Windows critical table is case-insensitive** with trailing-dot /
+  trailing-space lexical bypasses covered (registry paths are not
+  canonicalized by the OS, and Windows paths are case-insensitive).
+- **`fAnyOperationsAborted` is read back** — `SHFileOperationW` returning 0
+  can still silently abort (locked/denied files); partial failures no longer
+  report as full success.
+- **Empty-bundle-id guards** — `contains("")` on a formatted bundle id would
+  make family/web-app/full-match conditions always-true; empty id now disables
+  those matchers cleanly.
+- **Reparse-point double check** — orphan search also filters via
+  `is_reparse_point()` so a future std narrowing (SYMLINK-only) cannot leak
+  junctions into the delete set.
+
+### Correctness (audit P1 + Windows hardening)
+
+- **`winget` version normalization** — `> 1.2.3` version literals are
+  stripped of the `> ` prefix before display.
+- **Registry enumeration resilience** — a failed `RegEnumKeyExW` skips the
+  index instead of dropping the whole hive; `ERROR_MORE_DATA` grows the
+  buffer and retries; the name buffer is reused instead of reallocated.
+- **`is_writable` under sudo** — `geteuid() == 0` returns true so protected
+  detection works when running as root.
+- **Home trailing-slash** — a `HOME` ending in `/` can no longer bypass the
+  home-root block (normalized in the platform layer, all three adapters).
+- **`.Trash` component match** — `contains(".Trash")` became a
+  component-boundary check (`is_in_trash`), so `/Foo.Trash/…` paths are not
+  misblocked.
+- **`lipo thin` total** — size math uses `saturating_sub` (no panic on
+  underflow).
+- **`plugins --clean`** — now runs `check_protected` like `uninstall`.
+- **`DisplayIcon ",N"` index suffix** — stripped before use.
+- **Discovery cache** — `discover_installed_apps` runs once per command
+  (find_app_by_name + get_app_info_or_exit shared the enumeration).
+- **Windows orphan search covers Program Files (+x86)** — `reverse_paths`
+  gained both directories; short-name needles (non-ASCII ≥2 chars, e.g. 微信)
+  survive the ASCII-5 threshold; non-TTY confirmation is refused up front;
+  `adapter()` is a singleton; needle regexes are merged; a failed archive
+  folder reports "couldn't create" instead of "Nothing to delete".
+- The critical-path table moved into the `SystemPaths` trait (engine core
+  carries zero platform details).
+
+### Windows orphan search (real-device fixes, 81 → 45 orphans)
+
+The orphan list is driven by *names*, so already-installed apps and system
+components showed up as candidates after Program Files joined the scan. The
+root cause: needles are the app's display name ("7-Zip 24.09 (x64)"), which
+never matches the vendor directory ("7-Zip"). Fixed by deriving needles from
+the executable path itself:
+
+- **Path-derived needles** — up to 3 ancestor directories + the file stem of
+  each discovered executable (`Tencent\Weixin\Weixin.exe` → `weixin` +
+  `tencent`, `Code.exe` → `code`), threshold ≥3 chars. The exclude direction
+  is always safe: over-matching only causes false negatives.
+- **Structural dir names never become needles** — a 21-name table
+  (programs/startmenu/programfiles roots, local/roaming/appdata, bin/program,
+  microsoft/windows, …) so "programfiles" can't match every Program Files
+  path.
+- **System/structural dirs are filtered from results** — entry names in a
+  15-name AppData list (packages/temp/virtualstore/comms/…), `windows*`
+  prefixes, and `{common files, msbuild, reference assemblies, wsl,
+  modifiablewindowsapps, internet explorer, application verifier}` are
+  skipped. `validate_path` only guards critical *roots*; subdirectories would
+  otherwise be deleted by `clean-orphan`.
+- **Verified on the real machine**: 81 → 132 (with Program Files) → **45**
+  orphans. The 45 remaining are genuine residue candidates (EA/ENE/Patriot/
+  Verbatim/WD/Thunder Network…) or information-source gaps (dotnet/VulkanRT
+  registry entries have no path).
+- Known limits: `Documents\xwechat_files` (WeChat 4.0 data) shares no name
+  with Weixin.exe; registry entries without DisplayIcon/InstallLocation cannot
+  mark their dirs as installed; display-name variants (NVIDIA vs NVIDIA
+  Corporation) have no substring relation.
+- 6 new `cfg(windows)` unit tests cover dir/stem/ancestor derivation,
+  structural-dir skipping, and the system-dir filter (25 names). macOS paths
+  untouched (Windows blocks are cfg-isolated).
+
 ### Cross-platform
 
 - The engine core stays POSIX-agnostic; Windows-only code lives in
@@ -62,8 +167,13 @@ Menu, deleting via the system Recycle Bin.
 ### Quality
 
 - 110 tests on macOS; additional Windows-only suites (registry / Recycle Bin /
-  winget parsing) run on the windows-latest job. Clippy clean with
-  `-D warnings`; Linux + Windows cross-checks keep the core portable.
+  winget parsing, 6 orphan-needle tests) run on the windows-latest job. Clippy
+  clean with `-D warnings`; Linux + Windows cross-checks keep the core
+  portable.
+- Real-device verification on both platforms: a full macOS command walkthrough
+  (list/uninstall/orphan/clean-orphan/dev-clean/pkg/plugins/lipo incl. real
+  fat-binary thinning + ad-hoc re-signing) and Windows runs on a Win11 25H2
+  machine (registry discovery, Recycle Bin, winget, orphan convergence).
 
 ## [0.1.0] - 2026-08-12
 

@@ -50,7 +50,7 @@ independently — see [Beyond a straight port](CHANGELOG.md#beyond-a-straight-po
 then unzip and add it to your PATH:
 
 ```sh
-unzip apios-v0.1.0-macos-universal.zip -d ~/bin
+unzip apios-v0.2.0-macos-universal.zip -d ~/bin
 # universal binary: Apple Silicon (arm64) and Intel (x86_64)
 ```
 
@@ -74,9 +74,10 @@ cargo install --git git@github.com:Zniece/ApiosCleaner.git --locked
 ```
 
 **Windows**: download `apios-windows-x86_64` (a zip with `apios.exe`) from the
-latest [CI run](https://github.com/Zniece/ApiosCleaner/actions) → Artifacts, or
-`cargo install` on the machine itself. Requires no admin rights; the Recycle
-Bin API works per-user.
+latest [release](https://github.com/Zniece/ApiosCleaner/releases/latest) — or
+the latest [CI run](https://github.com/Zniece/ApiosCleaner/actions) →
+Artifacts for a fresh build — or `cargo install` on the machine itself.
+Requires no admin rights; the Recycle Bin API works per-user.
 
 > ⚠️ Deleting commands move files to the Trash (macOS/Linux) or the Recycle Bin
 > (Windows) and ask for confirmation; they never permanently delete. Run the

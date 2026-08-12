@@ -45,7 +45,7 @@
 下载最新版本，解压后加入 PATH：
 
 ```sh
-unzip apios-v0.1.0-macos-universal.zip -d ~/bin
+unzip apios-v0.2.0-macos-universal.zip -d ~/bin
 # 通用二进制：同时支持 Apple Silicon (arm64) 和 Intel (x86_64)
 ```
 
@@ -68,9 +68,11 @@ cargo install --git git@github.com:Zniece/ApiosCleaner.git --locked
 ```
 
 **Windows**：从最新的
+[Release](https://github.com/Zniece/ApiosCleaner/releases/latest)
+下载 `apios-windows-x86_64`（zip 包含 `apios.exe`）——或从
 [CI 运行](https://github.com/Zniece/ApiosCleaner/actions) → Artifacts
-下载 `apios-windows-x86_64`（zip 包含 `apios.exe`），或在 Windows 本机上执行
-`cargo install`。无需管理员权限；Recycle Bin API 按用户运行。
+获取最新构建——或在 Windows 本机上执行 `cargo install`。无需管理员权限；
+Recycle Bin API 按用户运行。
 
 > ⚠️ 删除类命令会将文件移入 Trash（macOS/Linux）或回收站（Windows），并请求
 > 确认，绝不永久删除。请勿以 `sudo` 运行——关键路径保护假设使用非 root 用户。
