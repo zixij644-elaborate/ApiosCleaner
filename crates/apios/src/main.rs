@@ -78,6 +78,7 @@ fn deleted_message(count: usize, bundle_folder: &std::path::Path) -> String {
 #[derive(Parser)]
 #[command(
     name = "apios",
+    bin_name = "apios", // Windows 上固定显示名（argv[0] 是 apios.exe）
     version,
     about = "ApiosCleaner — a fast cross-platform app cleaner",
     long_about = "ApiosCleaner finds every file an app left behind and cleans it up: \
