@@ -82,25 +82,32 @@ impl Default for Winget {
     }
 }
 
-/// 解析 `winget list --columns Name,Version` 输出（表格式纯文本）：
-/// 跳过表头（Name Version）与全虚线分隔行；每行按 ≥2 空格分格 ——
-/// 名称格可含单空格（"7-Zip"、"Microsoft Edge"），列间填充 ≥2 空格。
+/// 解析 `winget list` 输出（默认五列表格：Name / Id / Version / Available / Source）。
+/// 部分 winget 版本（如 v1.29）不支持 `--columns`，故按表头定位 Version 列索引；
+/// 每行按 ≥2 空格分格 —— 名称格可含单空格（"7-Zip"、"Microsoft Edge"），
+/// 列间填充 ≥2 空格。表头之前的提示行（source 协议等）为单空格连续文本，
+/// 天然只有 1 格，被跳过。
 pub fn parse_winget_list(output: &str) -> Vec<PkgInfo> {
     let re = regex::Regex::new(r"\s{2,}").unwrap();
     let mut pkgs = Vec::new();
+    let mut version_idx: Option<usize> = None;
     for line in output.lines() {
         let line = line.trim();
-        if line.is_empty() || line.starts_with("Name") {
-            continue;
-        }
-        if line.chars().all(|c| c == '-' || c == ' ') {
-            continue; // 分隔行
+        if line.is_empty() || line.chars().all(|c| c == '-' || c == ' ') {
+            continue; // 空行 / 分隔行
         }
         let cells: Vec<&str> = re.split(line).collect();
-        if cells.len() >= 2 {
+        // 表头行：定位 Version 列（`Name  Id  Version  Available  Source`）
+        if cells.len() >= 2 && cells.contains(&"Version") {
+            version_idx = cells.iter().position(|c| *c == "Version");
+            continue;
+        }
+        // 表头之前的数据行（理论上不存在）跳过
+        let Some(vi) = version_idx else { continue };
+        if cells.len() > vi {
             pkgs.push(PkgInfo {
                 name: cells[0].to_string(),
-                version: cells[cells.len() - 1].to_string(),
+                version: cells[vi].to_string(),
                 kind: PkgKind::Formula,
             });
         }
@@ -120,7 +127,8 @@ impl PackageManager for Winget {
         if kind == PkgKind::Cask {
             return Ok(Vec::new());
         }
-        let mut args = vec!["list", "--columns", "Name,Version"];
+        // 不带 --columns：winget v1.29 的 list 不支持该参数，默认五列表格
+        let mut args = vec!["list"];
         args.extend(AUTOMATION_FLAGS);
         let output = self.run(&args)?;
         Ok(parse_winget_list(&String::from_utf8_lossy(&output.stdout)))
@@ -187,10 +195,11 @@ mod tests {
 
     #[test]
     fn test_parse_list_basic_table() {
-        let out = "Name                    Version\n\
-            -------------------------------------  -------\n\
-            7-Zip                   24.09\n\
-            Microsoft Edge          139.0.2849.58\n";
+        // winget 默认五列表格：Name / Id / Version / Available / Source
+        let out = "Name                    Id             Version       Available    Source\n\
+            ------------------------  -------------  ------------  -----------  ------\n\
+            7-Zip                     7zip.7zip      24.09         24.10        winget\n\
+            Microsoft Edge            MSEdge        139.0.2849.58              winget\n";
         let pkgs = parse_winget_list(out);
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "7-Zip");
@@ -205,15 +214,19 @@ mod tests {
     fn test_parse_list_empty_and_header_only() {
         assert!(parse_winget_list("").is_empty());
         // 无包时 winget 仍打印表头 + 分隔行
-        assert!(parse_winget_list("Name    Version\n--------  -------\n").is_empty());
+        assert!(parse_winget_list(
+            "Name  Id  Version  Available  Source\n-------  ----  -------  ---------  ------\n"
+        )
+        .is_empty());
     }
 
     #[test]
     fn test_parse_list_skips_noise_lines() {
-        let out = "Name    Version\n--------  -------\n\
+        let out =
+            "Name  Id  Version  Available  Source\n-------  ----  -------  ---------  ------\n\
             Some package \"note\" text\n\
-            Foo       1.0.0\n";
-        // 引号注释行（如 "No installed package found..."）→ 分格不足 2 → 忽略
+            Foo    foo.id  1.0.0     1.0.1      winget\n";
+        // 单空格连续文本（如 source 协议提示行）→ 只有 1 格 → 忽略
         let pkgs = parse_winget_list(out);
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].name, "Foo");
@@ -223,8 +236,10 @@ mod tests {
     fn test_parse_list_sorts() {
         // 列宽分格：解析器按 ≥2 空格分列（单空格保留在包名内），输入须为真实
         // winget 的填充形态（否则整行被跳过）
-        let out = "Name    Version\n--------  -------\n\
-            zz          2.0\naa          1.0\n";
+        let out =
+            "Name  Id  Version  Available  Source\n-------  ----  -------  ---------  ------\n\
+            zz     zz.id  2.0     2.0.1      winget\n\
+            aa     aa.id  1.0     1.0.1      winget\n";
         let pkgs = parse_winget_list(out);
         assert_eq!(pkgs[0].name, "aa");
         assert_eq!(pkgs[1].name, "zz");

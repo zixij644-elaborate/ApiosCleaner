@@ -24,6 +24,8 @@ const FOF_ALLOWUNDO: u16 = 0x0040;
 const FOF_NOERRORUI: u16 = 0x0400;
 
 /// SHFILEOPSTRUCTW（关键字段；hwnd/name mappings 等不需要的置空）
+/// 命名保持 Win32 API 原名（W 后缀），clippy 缩写 lint 放行
+#[allow(clippy::upper_case_acronyms)]
 #[repr(C)]
 struct SHFILEOPSTRUCTW {
     hwnd: *mut u8,
@@ -98,7 +100,7 @@ pub fn recycle_batch(paths: &[PathBuf]) -> Vec<PathBuf> {
         }
     }
     for p in remaining {
-        if shfileop_delete(&[p.clone()]) {
+        if shfileop_delete(std::slice::from_ref(&p)) {
             moved.push(p);
         }
     }
@@ -163,7 +165,7 @@ mod tests {
         let file = dir.join("to-recycle.txt");
         fs::write(&file, b"junk").unwrap();
 
-        let moved = recycle_batch(&[file.clone()]);
+        let moved = recycle_batch(std::slice::from_ref(&file));
         assert!(!file.exists(), "文件应已移入回收站");
         assert_eq!(moved.len(), 1);
 
@@ -175,7 +177,7 @@ mod tests {
     fn test_recycle_nonexistent_path_fails_silently() {
         // 不存在的路径：批量调用失败 → 逐文件重试失败 → 不算 moved（不 panic）
         let ghost = PathBuf::from(r"C:\__apios_nonexistent_zzz__\ghost.txt");
-        let moved = recycle_batch(&[ghost.clone()]);
+        let moved = recycle_batch(std::slice::from_ref(&ghost));
         assert!(moved.is_empty());
     }
 }

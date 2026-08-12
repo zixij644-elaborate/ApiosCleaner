@@ -405,9 +405,16 @@ fn find_app_by_name(name: &str, folders: &[String]) -> Option<PathBuf> {
         let _ = folders;
         let apps = apios_core::platform::adapter().discover_installed_apps();
         let lower = name.to_lowercase();
-        apps.into_iter()
+        // 精确匹配优先；否则前缀匹配（注册表 DisplayName 常带版本号，
+        // 如 "7-Zip 26.01 (x64)" → 输入 "7-Zip" 命中），多命中取最短名
+        apps.iter()
             .find(|a| a.app_name.to_lowercase() == lower)
-            .map(|a| a.path)
+            .or_else(|| {
+                apps.iter()
+                    .filter(|a| a.app_name.to_lowercase().starts_with(&lower))
+                    .min_by_key(|a| a.app_name.len())
+            })
+            .map(|a| a.path.clone())
     }
     #[cfg(not(windows))]
     {
@@ -494,7 +501,7 @@ fn get_app_info_or_exit(path: &Path) -> AppInfo {
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
-        return AppInfo {
+        AppInfo {
             path: path.to_path_buf(),
             bundle_identifier: String::new(),
             app_name,
@@ -503,7 +510,7 @@ fn get_app_info_or_exit(path: &Path) -> AppInfo {
             web_app: false,
             steam: false,
             wrapped: false,
-        };
+        }
     }
     #[cfg(not(windows))]
     {

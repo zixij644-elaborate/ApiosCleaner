@@ -126,9 +126,9 @@ pub fn entry_from_values(
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
         let s = narrow(&u16buf);
-        match ty {
-            &REG_EXPAND_SZ => Some(expand_env(&s)),
-            &REG_SZ => Some(s), // 原样（不展开）
+        match *ty {
+            REG_EXPAND_SZ => Some(expand_env(&s)),
+            REG_SZ => Some(s), // 原样（不展开）
             _ => Some(s),
         }
     };
