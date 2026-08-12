@@ -62,11 +62,13 @@ impl CachedIdentifiers {
             .chars()
             .filter(|c| c.is_alphabetic())
             .collect();
-        // 原版：lastPathComponent.replacingOccurrences(of: ".app", with: "")（替换所有出现）
+        // 原版：lastPathComponent.replacingOccurrences(of: ".app", with: "")（替换所有出现）。
+        // 必须 pearFormat —— matcher 侧 normalized_item_name 已格式化，
+        // 不格式化则比较永不相等（原版此处是隐藏死代码 → 路径名匹配始终 false）
         let path_component_name = app
             .path
             .file_name()
-            .map(|n| n.to_string_lossy().replace(".app", ""))
+            .map(|n| pear_format(&n.to_string_lossy().replace(".app", "")))
             .unwrap_or_default();
 
         // 原版 isValidBundleIdentifier（AppPathsFetch.swift:481-487）
@@ -165,7 +167,7 @@ mod tests {
         assert_eq!(ids.bundle_last_two_components, "microsoftvscode");
         assert_eq!(ids.formatted_app_name, "visualstudiocode");
         assert_eq!(ids.app_name_letters_only, "visualstudiocode");
-        assert_eq!(ids.path_component_name, "Visual Studio Code");
+        assert_eq!(ids.path_component_name, "visualstudiocode");
         assert!(ids.use_bundle_identifier);
         // 3 段 bundle ID → company = 中间段（原版 rawComponents[1]）
         assert_eq!(ids.formatted_company_name.as_deref(), Some("microsoft"));

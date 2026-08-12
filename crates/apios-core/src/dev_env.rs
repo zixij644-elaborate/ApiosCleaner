@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
 
-use crate::platform::DevEnvPaths;
+use crate::platform::{DevEnvPaths, SystemPaths};
 
 /// 单个开发环境（原版 PathEnv）
 #[derive(Debug, Clone)]
@@ -79,7 +79,9 @@ pub fn expand_globs(pattern: &Path) -> Vec<PathBuf> {
     results
 }
 
-/// 目录大小（递归求和，跳过隐藏项 —— 原版 skipsHiddenFiles）
+/// 目录大小（递归求和，跳过隐藏项 —— 原版 skipsHiddenFiles）。
+/// 用 `file_type()`（lstat 语义）判定目录 —— `metadata()` 跟随符号链接，
+/// 指向树内祖先的链接会让递归永不终止。
 pub fn dir_size(path: &Path) -> u64 {
     let mut total = 0u64;
     let mut stack = vec![path.to_path_buf()];
@@ -93,10 +95,10 @@ pub fn dir_size(path: &Path) -> u64 {
                 continue;
             }
             let p = entry.path();
-            match entry.metadata() {
-                Ok(m) if m.is_dir() => stack.push(p),
-                Ok(m) => total += m.len(),
-                Err(_) => {}
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => stack.push(p),
+                Ok(t) if t.is_file() => total += entry.metadata().map(|m| m.len()).unwrap_or(0),
+                _ => {} // 符号链接/其他：不计（不跟随，防环）
             }
         }
     }
@@ -121,7 +123,8 @@ pub fn dedup_nested(dirs: &mut Vec<PathBuf>) {
 
 /// 所有环境的大小（rayon 并行：每个环境的路径独立，互不依赖）
 pub fn env_sizes() -> Vec<EnvSize> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    // HOME 统一走适配器（单一事实来源；不直接读环境变量）
+    let home = crate::platform::adapter().home();
     crate::platform::adapter()
         .dev_envs()
         .into_par_iter()

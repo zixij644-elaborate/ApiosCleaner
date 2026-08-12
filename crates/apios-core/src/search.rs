@@ -51,10 +51,22 @@ impl<'a> AppPathFinder<'a> {
     }
 
     /// 初始路径处理（AppPathsFetch.swift:135-140）：插入应用自身（Wrapper 应用上跳两级）
+    ///
+    /// 原版对整个路径做 `contains("Wrapper")` 子串匹配 —— 任意祖先目录名含 "Wrapper"
+    /// （如 /Users/wrapperx/Applications/Foo.app）都会误上跳两级到目录本身，
+    /// 整个目录被收进 collection → 删除列表。这里只在**紧邻父目录**名含 "Wrapper"
+    /// （真实 wrapped 结构 `…/Wrapper/Foo.app`）时上跳。
     fn initial_url_processing(&mut self) {
         let path_str = self.app.path.to_string_lossy().to_string();
         if !path_str.contains(".Trash") {
-            let modified = if path_str.contains("Wrapper") {
+            let parent_name = self
+                .app
+                .path
+                .parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let modified = if parent_name.contains("Wrapper") {
                 self.app
                     .path
                     .parent()
@@ -189,7 +201,8 @@ impl<'a> AppPathFinder<'a> {
         let mut outliers = Vec::new();
         let bundle_identifier = pear_format(&self.app.bundle_identifier);
         for condition in &self.conditions {
-            if bundle_identifier.contains(condition.bundle_id.as_str()) {
+            // 精确匹配（原版 contains 子串 → VS Code Insiders 误命中 stable 的条件表）
+            if bundle_identifier == condition.bundle_id {
                 if include {
                     outliers.extend(condition.include_force.iter().cloned());
                 } else {
@@ -224,21 +237,21 @@ impl<'a> AppPathFinder<'a> {
         let exclude_paths: HashSet<&Path> = outliers_ex.iter().map(|p| p.as_path()).collect();
         temp.retain(|url| !exclude_paths.contains(url.as_path()));
 
-        // 排序 + 子路径过滤（CLI 版只与前一元素比较，AppPathsFetch.swift:717-726）
+        // 排序 + 子路径过滤（AppPathsFetch.swift:717-726）。
+        // 原版 CLI 简化只与前一元素比较 → A 是 C 祖先、B 排中间时 C 逃逸；
+        // 且相同路径（containers/spotlight/outliers 交叠）不重复去重。
+        // 改为与所有已保留元素比较（规模几十到几百，O(n²) 可接受）。
         temp.sort();
         let mut filtered: Vec<PathBuf> = Vec::new();
-        let mut previous: Option<&Path> = None;
         for url in &temp {
-            if let Some(prev) = previous {
-                if url
-                    .to_string_lossy()
-                    .starts_with(&format!("{}/", prev.to_string_lossy()))
-                {
-                    continue;
-                }
+            let s = url.to_string_lossy();
+            let is_sub = filtered.iter().any(|k| {
+                let ks = k.to_string_lossy();
+                s == ks || s.starts_with(&format!("{ks}/"))
+            });
+            if !is_sub {
+                filtered.push(url.clone());
             }
-            filtered.push(url.clone());
-            previous = Some(url.as_path());
         }
 
         // 唯一结果是回收站内文件 → 清空（AppPathsFetch.swift:727-729）
@@ -288,6 +301,42 @@ mod tests {
         let mut finder = AppPathFinder::new(&app, &loc, Sensitivity::Strict);
         finder.initial_url_processing();
         assert!(finder.collection.is_empty(), "回收站内路径不应被加入集合");
+    }
+
+    /// 回归：祖先目录名含 "Wrapper"（非紧邻父目录）不得上跳 —— 原版子串匹配会
+    /// 把 /Users/wrapperx/Applications 整目录收进 collection
+    #[test]
+    fn test_initial_url_processing_wrapper_ancestor_no_jump() {
+        let app = AppInfo {
+            path: PathBuf::from("/Users/wrapperx/Applications/SomeApp.app"),
+            ..make_app("com.test.app", "SomeApp")
+        };
+        let loc = Locations::new();
+        let mut finder = AppPathFinder::new(&app, &loc, Sensitivity::Strict);
+        finder.initial_url_processing();
+        assert_eq!(
+            finder.collection.iter().collect::<Vec<_>>(),
+            vec![&PathBuf::from("/Users/wrapperx/Applications/SomeApp.app")],
+            "普通应用只插入自身"
+        );
+    }
+
+    /// 真实 wrapped 结构（紧邻父目录为 Wrapper）：上跳两级到 Wrapper 的父目录
+    #[test]
+    fn test_initial_url_processing_wrapped_app_jumps() {
+        let app = AppInfo {
+            path: PathBuf::from("/Users/u/Library/Containers/com.x/Data/Wrapper/SomeApp.app"),
+            ..make_app("com.test.app", "SomeApp")
+        };
+        let loc = Locations::new();
+        let mut finder = AppPathFinder::new(&app, &loc, Sensitivity::Strict);
+        finder.initial_url_processing();
+        assert!(finder
+            .collection
+            .contains(&PathBuf::from("/Users/u/Library/Containers/com.x/Data")));
+        assert!(!finder.collection.contains(&PathBuf::from(
+            "/Users/u/Library/Containers/com.x/Data/Wrapper"
+        )));
     }
 
     #[test]

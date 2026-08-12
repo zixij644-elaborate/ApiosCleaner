@@ -7,6 +7,8 @@
 //!   apios clean-orphan       删除全部孤儿文件（交互确认）
 //!   apios dev-clean [env]    列出开发环境缓存；带 <env> 则清理（交互确认）
 //!   apios pkg <pm> <action>  包管理器：卸载包本体 + 依赖处理（brew 为当前实现）
+//!   apios lipo [app]         扫描通用（fat）二进制，显示可省空间（只读）
+//!   apios lipo thin <app>    瘦身为当前架构（交互确认；--sign 可选 ad-hoc 重签）
 //!
 //! <app> 参数支持三种形式：
 //!   完整路径      apios uninstall /Applications/Foo.app
@@ -22,11 +24,12 @@ use std::process::exit;
 
 use apios_core::app_info::get_app_info;
 use apios_core::dev_env::{dedup_nested, dir_size, env_sizes, expand_globs, expand_home, find_env};
+use apios_core::lipo::{self, cpu_name, current_cputype, select_runnable_slice, FatFile};
 use apios_core::locations::Locations;
 use apios_core::model::{AppInfo, Sensitivity};
 use apios_core::orphan::ReversePathsSearcher;
 use apios_core::pkg::{detect_kind, PkgKind};
-use apios_core::platform::{PackageManager, PackageManagers, ProcessControl};
+use apios_core::platform::{PackageManager, PackageManagers, ProcessControl, SystemPaths};
 use apios_core::scan::{default_app_folders, get_sorted_apps};
 use apios_core::search::AppPathFinder;
 use apios_core::trash::{delete_files, is_writable};
@@ -74,6 +77,13 @@ enum Command {
         #[command(subcommand)]
         action: PkgAction,
     },
+    /// Scan apps for universal (fat) binaries; thin them to the current architecture
+    Lipo {
+        /// App path or name to scan; omit to scan all apps in the default folders
+        app: Option<String>,
+        #[command(subcommand)]
+        action: Option<LipoAction>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -93,6 +103,18 @@ enum PkgAction {
     Autoremove,
 }
 
+#[derive(Subcommand)]
+enum LipoAction {
+    /// Thin universal binaries in an app to the current architecture (irreversible)
+    Thin {
+        /// App path or name, or "." for the current directory
+        app: String,
+        /// Also re-sign thinned binaries ad-hoc (codesign -s -) to fix broken signatures
+        #[arg(long)]
+        sign: bool,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
     match cli.command {
@@ -102,14 +124,20 @@ fn main() {
         Command::CleanOrphan => cmd_clean_orphan(&cli),
         Command::DevClean { ref env } => cmd_dev_clean(&cli, env.as_deref()),
         Command::Pkg { ref pm, ref action } => cmd_pkg(&cli, pm, action),
+        Command::Lipo {
+            ref app,
+            ref action,
+        } => cmd_lipo(&cli, app.as_deref(), action.as_ref()),
     }
 }
 
 // ---------- <app> 参数解析 ----------
 
-/// 参数是路径形式（含目录分隔、带 .app 后缀，或已存在）？
+/// 参数是路径形式（含目录分隔或带 .app 后缀）？
+/// 注意：不含 `Path::exists()` —— 裸名（如 "Firefox"）若碰巧在 cwd 有同名文件会被劫持
+/// 成路径，绕过应用名查找。裸名一律走 `find_app_by_name`。
 fn arg_is_path(arg: &str) -> bool {
-    arg.contains('/') || arg.to_ascii_lowercase().ends_with(".app") || Path::new(arg).exists()
+    arg.contains('/') || arg.to_ascii_lowercase().ends_with(".app")
 }
 
 /// 在默认应用目录中按名称查找 <name>.app（先精确匹配，再大小写不敏感）
@@ -138,14 +166,21 @@ fn find_app_by_name(name: &str, folders: &[String]) -> Option<PathBuf> {
 
 /// 解析 <app> 参数 → 应用 bundle 路径；失败时打印用法并退出 1
 fn resolve_app_or_exit(arg: &str) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = apios_core::platform::adapter().home();
     let folders = default_app_folders(&home);
 
     let resolved = if arg == "." {
         // 当前目录：直接使用；若当前目录是个 .app 之外的东西，后面 get_app_info 会报错
         std::env::current_dir().ok()
     } else if arg_is_path(arg) {
-        Some(PathBuf::from(arg))
+        let p = PathBuf::from(expand_home(arg, &home));
+        // 带 .app 后缀的裸名（无 /）：先当路径；不存在时回退到应用名查找
+        // （`apios list SomeApp.app` 但 SomeApp.app 不在默认目录外 → 仍按名找到）
+        if p.exists() || arg.contains('/') {
+            Some(p)
+        } else {
+            find_app_by_name(arg, &folders)
+        }
     } else {
         find_app_by_name(arg, &folders)
     };
@@ -215,6 +250,17 @@ fn check_protected(files: &[PathBuf], hint: &str) {
     exit(1);
 }
 
+/// 打印被 validate_path 安全校验拦截的路径（不应出现；出现即上游 bug，要可见）
+fn report_blocked(blocked: &[PathBuf]) {
+    if blocked.is_empty() {
+        return;
+    }
+    eprintln!("Skipped {} protected path(s):", blocked.len());
+    for p in blocked {
+        eprintln!("  {}", p.display());
+    }
+}
+
 // ---------- 命令实现 ----------
 
 fn find_app_paths(app: &AppInfo) -> Vec<PathBuf> {
@@ -272,6 +318,11 @@ fn cmd_uninstall(cli: &Cli, arg: &str) {
             );
         }
         exit(0);
+    } else if result.moved.is_empty() && result.failed.is_empty() {
+        // 列表为空或全部被安全校验拦截 → 无事可删，不是错误
+        report_blocked(&result.blocked);
+        println!("Nothing to delete.");
+        exit(0);
     } else {
         eprintln!("\napios: failed to delete files (in use or protected).");
         exit(1);
@@ -289,7 +340,7 @@ fn dir_contents(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn cmd_dev_clean(cli: &Cli, env: Option<&str>) {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = apios_core::platform::adapter().home();
 
     // 无参数：列出所有环境的占用（只读）
     let Some(env_name) = env else {
@@ -360,8 +411,13 @@ fn cmd_dev_clean(cli: &Cli, env: Option<&str>) {
             );
         }
         exit(0);
+    } else if result.moved.is_empty() && result.failed.is_empty() {
+        // 全部被安全校验拦截 → 无事可删，不是错误
+        report_blocked(&result.blocked);
+        println!("Nothing to delete.");
+        exit(0);
     } else {
-        eprintln!("\napios: failed to delete files.");
+        eprintln!("\napios: failed to delete files ({}).", env.name);
         exit(1);
     }
 }
@@ -498,7 +554,8 @@ fn cmd_pkg_uninstall(cli: &Cli, pm: &dyn PackageManager, name: &str, zap: bool) 
     }
     println!("Uninstalled {name}.");
 
-    // 7. 卸载后孤儿依赖提示（brew autoremove -n 预演）
+    // 7. 卸载后孤儿依赖提示（brew autoremove -n 预演）。
+    // 卸载已成功 —— 后续步骤失败一律降级为 warning，不把命令整体报成失败。
     match pm.autoremove_dry_run() {
         Ok(orphans) if !orphans.is_empty() => {
             println!("\n{} orphaned package(s) detected:", orphans.len());
@@ -506,11 +563,13 @@ fn cmd_pkg_uninstall(cli: &Cli, pm: &dyn PackageManager, name: &str, zap: bool) 
                 println!("  {o}");
             }
             if confirm(cli, &format!("Autoremove {} package(s)? ", orphans.len())) {
-                if let Err(e) = pm.autoremove() {
-                    eprintln!("apios: {}: {e}", pm.name());
-                    exit(1);
+                match pm.autoremove() {
+                    Ok(()) => println!("Autoremoved {} package(s).", orphans.len()),
+                    Err(e) => {
+                        eprintln!("apios: warning: autoremove failed: {e}");
+                        println!("Hint: run `apios pkg {} autoremove` to retry.", pm.name());
+                    }
                 }
-                println!("Autoremoved {} package(s).", orphans.len());
             } else {
                 println!(
                     "Hint: run `apios pkg {} autoremove` to remove them.",
@@ -520,8 +579,7 @@ fn cmd_pkg_uninstall(cli: &Cli, pm: &dyn PackageManager, name: &str, zap: bool) 
         }
         Ok(_) => {}
         Err(e) => {
-            eprintln!("apios: {}: {e}", pm.name());
-            exit(1);
+            eprintln!("apios: warning: autoremove dry-run failed: {e}");
         }
     }
 }
@@ -553,12 +611,254 @@ fn cmd_pkg_autoremove(cli: &Cli, pm: &dyn PackageManager) {
     println!("Autoremoved {} package(s).", orphans.len());
 }
 
+// ---------- Lipo（fat 瘦身） ----------
+
+fn cmd_lipo(cli: &Cli, app: Option<&str>, action: Option<&LipoAction>) {
+    match action {
+        Some(LipoAction::Thin { app, sign }) => cmd_lipo_thin(cli, app, *sign),
+        None => cmd_lipo_scan(cli, app),
+    }
+}
+
+/// 目标切片（当前架构 + CPU 能力过滤：x86_64h 仅在有 AVX2 时可选）；
+/// 当前架构不在文件内 → None（跳过该文件）
+fn keep_slice(fat: &FatFile) -> Option<&apios_core::lipo::FatSlice> {
+    select_runnable_slice(&fat.slices, current_cputype())
+}
+
+/// 切片描述："arm64 (52.3 MB) · x86_64 (48.1 MB)"
+fn describe_slices(fat: &FatFile) -> String {
+    fat.slices
+        .iter()
+        .map(|s| {
+            format!(
+                "{} ({})",
+                cpu_name(s.cputype, s.cpusubtype),
+                fmt_size(s.size)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// 相对路径显示，超长截断（避免 Qt 插件式长路径把列宽撑爆）
+fn truncated_rel(path: &Path, bundle: &Path, max: usize) -> String {
+    let rel = path
+        .strip_prefix(bundle)
+        .unwrap_or(path)
+        .display()
+        .to_string();
+    if rel.chars().count() <= max {
+        return rel;
+    }
+    format!(
+        "{}…",
+        rel.chars().take(max.saturating_sub(1)).collect::<String>()
+    )
+}
+
+/// 打印单个 app 的 fat 二进制明细；返回（可省总量, fat 二进制数）
+fn print_app_binaries(bundle: &Path, bins: &[(std::path::PathBuf, FatFile)]) -> (u64, usize) {
+    const MAX_PATH: usize = 64;
+    let width = bins
+        .iter()
+        .map(|(p, _)| truncated_rel(p, bundle, MAX_PATH).chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut freed = 0u64;
+    for (path, fat) in bins {
+        let rel = truncated_rel(path, bundle, MAX_PATH);
+        println!("  {rel:width$}  {}", describe_slices(fat), width = width);
+        match keep_slice(fat) {
+            Some(keep) => {
+                let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+                let free = len.saturating_sub(keep.size);
+                freed += free;
+                println!(
+                    "      → keep {} ({}), free {}",
+                    cpu_name(keep.cputype, keep.cpusubtype),
+                    fmt_size(keep.size),
+                    fmt_size(free)
+                );
+            }
+            None => println!("      (no slice for current architecture)"),
+        }
+    }
+    (freed, bins.len())
+}
+
+/// 扫描：`apios lipo`（全部应用）或 `apios lipo <app>`（只读）
+fn cmd_lipo_scan(cli: &Cli, app: Option<&str>) {
+    let _ = cli;
+    if let Some(arg) = app {
+        let bundle = resolve_app_or_exit(arg);
+        let app_name = bundle
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("app")
+            .to_string();
+        let bins = lipo::scan_dir_fat_binaries(&bundle);
+        println!("{app_name}:");
+        let (freed, count) = print_app_binaries(&bundle, &bins);
+        println!();
+        if count == 0 {
+            println!("No universal binaries in {app_name}.");
+        } else {
+            println!("{count} fat binary(ies) — can free {}", fmt_size(freed));
+        }
+        return;
+    }
+
+    // 全部默认应用目录
+    let home = apios_core::platform::adapter().home();
+    let apps = get_sorted_apps(&default_app_folders(&home));
+    let mut total_freed = 0u64;
+    let mut app_count = 0usize;
+    for app in &apps {
+        let bins = lipo::scan_dir_fat_binaries(&app.path);
+        if bins.is_empty() {
+            continue;
+        }
+        let (freed, count) = print_app_binaries(&app.path, &bins);
+        let name = app.app_name.as_str();
+        println!(
+            "{name}: {count} fat binary(ies) — can free {}",
+            fmt_size(freed)
+        );
+        println!();
+        total_freed += freed;
+        app_count += 1;
+    }
+    if app_count == 0 {
+        println!("No universal binaries found in any app.");
+    } else {
+        println!(
+            "{app_count} app(s) with universal binaries — total can free {}",
+            fmt_size(total_freed)
+        );
+    }
+}
+
+/// 瘦身：`apios lipo thin <app> [--sign]`（破坏性，交互确认）
+fn cmd_lipo_thin(cli: &Cli, arg: &str, sign: bool) {
+    let bundle = resolve_app_or_exit(arg);
+    let app_name = bundle
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("app")
+        .to_string();
+    let bins = lipo::scan_dir_fat_binaries(&bundle);
+
+    // 计划：可瘦身的文件（目标切片存在）
+    let plan: Vec<(
+        &std::path::PathBuf,
+        &FatFile,
+        &apios_core::lipo::FatSlice,
+        u64,
+    )> = bins
+        .iter()
+        .filter_map(|(path, fat)| {
+            let keep = keep_slice(fat)?;
+            let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            Some((path, fat, keep, len))
+        })
+        .collect();
+    if plan.is_empty() {
+        println!("Nothing to thin in {app_name}.");
+        return;
+    }
+
+    let total_free: u64 = plan.iter().map(|(_, _, s, len)| len - s.size).sum();
+    let target_name = cpu_name(current_cputype(), 0);
+    println!(
+        "{} universal binary(ies) will be thinned to {}:",
+        plan.len(),
+        target_name
+    );
+    const MAX_PATH: usize = 64;
+    let width = plan
+        .iter()
+        .map(|(p, _, _, _)| truncated_rel(p, &bundle, MAX_PATH).chars().count())
+        .max()
+        .unwrap_or(0);
+    for (path, fat, keep, len) in &plan {
+        let rel = truncated_rel(path, &bundle, MAX_PATH);
+        println!(
+            "  {rel:width$}  {} → {} (free {})",
+            describe_slices(fat),
+            fmt_size(keep.size),
+            fmt_size(len.saturating_sub(keep.size)),
+            width = width
+        );
+    }
+    println!("\nFreeing {} total.", fmt_size(total_free));
+    if sign {
+        println!("WARNING: irreversible — binaries are overwritten in place; they will be re-signed ad-hoc.");
+    } else {
+        println!("WARNING: irreversible — binaries are overwritten in place and code signatures will be invalidated.");
+    }
+    if !confirm(cli, &format!("Thin {} binary(ies)? ", plan.len())) {
+        println!("Aborted — nothing was deleted.");
+        return;
+    }
+
+    let mut thinned = 0usize;
+    let mut freed = 0u64;
+    let mut failed = 0usize;
+    for (path, _, keep, len) in &plan {
+        match lipo::thin_file(path, keep) {
+            Ok(_) => {
+                thinned += 1;
+                freed += len.saturating_sub(keep.size);
+            }
+            Err(e) => {
+                failed += 1;
+                eprintln!("apios: failed to thin {}: {e}", path.display());
+            }
+        }
+    }
+    // 刷新 bundle 目录 mtime（Finder 立即更新占用大小；失败静默——非关键）
+    let _ = lipo::touch_dir(&bundle);
+    if failed > 0 {
+        eprintln!(
+            "apios: failed to thin {failed} of {} binary(ies).",
+            plan.len()
+        );
+        exit(1);
+    }
+    println!("Thinned {thinned} binary(ies) — freed {}.", fmt_size(freed));
+
+    if sign {
+        let mut signed = 0usize;
+        let mut sign_failed = 0usize;
+        for (path, _, _, _) in &plan {
+            match lipo::re_sign(path) {
+                Ok(()) => signed += 1,
+                Err(e) => {
+                    sign_failed += 1;
+                    eprintln!("apios: warning: re-sign failed for {}: {e}", path.display());
+                }
+            }
+        }
+        println!("Re-signed {signed} binary(ies) (ad-hoc).");
+        if sign_failed > 0 {
+            eprintln!(
+                "apios: warning: {sign_failed} binary(ies) left unsigned — the app may not launch."
+            );
+        }
+    } else {
+        println!(
+            "Code signatures were invalidated — re-run with `apios lipo thin --sign` to re-sign ad-hoc."
+        );
+    }
+}
+
 fn fmt_size(bytes: u64) -> String {
     apios_core::dev_env::fmt_size(bytes)
 }
 
 fn find_orphans() -> Vec<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = apios_core::platform::adapter().home();
     let locations = Locations::new();
     let apps = get_sorted_apps(&default_app_folders(&home));
     let mut searcher = ReversePathsSearcher::new(locations, apps);
@@ -577,6 +877,11 @@ fn cmd_orphan(cli: &Cli) {
 
 fn cmd_clean_orphan(cli: &Cli) {
     let found = find_orphans();
+
+    if found.is_empty() {
+        println!("No orphaned files found.");
+        return;
+    }
 
     check_protected(&found, "apios clean-orphan");
 
@@ -599,6 +904,11 @@ fn cmd_clean_orphan(cli: &Cli) {
                 result.failed.len()
             );
         }
+        exit(0);
+    } else if result.moved.is_empty() && result.failed.is_empty() {
+        // 列表为空或全部被安全校验拦截 → 无事可删，不是错误
+        report_blocked(&result.blocked);
+        println!("Nothing to delete.");
         exit(0);
     } else {
         eprintln!("\napios: failed to delete orphaned files.");

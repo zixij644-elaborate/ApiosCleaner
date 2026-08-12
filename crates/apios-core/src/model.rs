@@ -16,7 +16,9 @@ impl Sensitivity {
         match s.to_lowercase().as_str() {
             "strict" => Sensitivity::Strict,
             "enhanced" => Sensitivity::Enhanced,
-            _ => Sensitivity::Deep, // 原版 @AppStorage 默认 .strict；这里默认 Deep 由调用方决定
+            // 未知值兜底 Deep（原版 @AppStorage 持久化值只有这三种；本枚举 Default 即 Deep，
+            // 兜底与 Default 一致。调用方（CLI 固定 Strict）不受影响）
+            _ => Sensitivity::Deep,
         }
     }
 }

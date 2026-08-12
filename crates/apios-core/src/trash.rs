@@ -14,9 +14,12 @@ use chrono::Local;
 use crate::platform::Trash;
 
 /// isWritableFile 移植（CLI.swift uninstall-all/remove-orphaned 的受保护文件检测）：
-/// POSIX access(W_OK) 语义，root 恒可写 → sudo 下不触发受保护分支
+/// POSIX rename 语义 —— 需要的是**父目录**可写，而非条目自身（条目只读不影响 mv）。
+/// 原版 FileManager.isWritableFile 测条目本身 → 只读文件被误报为受保护。
+/// root 恒可写 → sudo 下不触发受保护分支。
 pub fn is_writable(path: &Path) -> bool {
-    let Ok(c_path) = std::ffi::CString::new(path.to_string_lossy().as_bytes()) else {
+    let parent = path.parent().unwrap_or_else(|| Path::new("/"));
+    let Ok(c_path) = std::ffi::CString::new(parent.to_string_lossy().as_bytes()) else {
         return false;
     };
     unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 }
@@ -39,15 +42,47 @@ pub struct DeleteResult {
     pub failed: Vec<PathBuf>,
 }
 
-/// 路径安全校验（UndoManager.swift:24-60）
-pub fn validate_path(path: &str) -> bool {
-    let normalized = Path::new(path);
-    if normalized.as_os_str().to_string_lossy().trim().is_empty() {
-        return false;
+/// 词法归一化绝对路径：折叠 `.`/`..`、合并重复分隔符、去掉尾部斜杠。
+/// `..` 越界收缩到根（`/Users/../Library` → `/Library`）。
+/// 相对路径（不以 / 开头）返回 None —— 删除列表必须是绝对路径，相对路径说明上游有 bug。
+/// 注：按 POSIX 分隔符处理；Windows 盘符（Prefix 组件）不参与 critical 匹配，方向安全。
+fn normalize_absolute(path: &str) -> Option<String> {
+    use std::path::Component;
+    let mut parts: Vec<String> = Vec::new();
+    let mut absolute = false;
+    for comp in Path::new(path).components() {
+        match comp {
+            Component::RootDir => {
+                absolute = true;
+                parts.clear();
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                parts.pop();
+            }
+            Component::Normal(n) => parts.push(n.to_string_lossy().into_owned()),
+            Component::Prefix(_) => {}
+        }
     }
+    if !absolute {
+        return None;
+    }
+    if parts.is_empty() {
+        return Some("/".to_string());
+    }
+    Some(format!("/{}", parts.join("/")))
+}
+
+/// 路径安全校验（UndoManager.swift:24-60）。
+/// 原版按原始字符串精确匹配 → `..`/`//`/尾部斜杠可绕过 critical 表；
+/// 这里先做词法归一化再匹配，并补充 /Users、/Users/Shared、{home}/Applications。
+/// 子路径（/usr/local、{home}/Library/...）仍放行 —— 是合法删除目标。
+pub fn validate_path(path: &str) -> bool {
+    let Some(normalized) = normalize_absolute(path) else {
+        return false;
+    };
     let home = std::env::var("HOME").unwrap_or_default();
     let critical: &[&str] = &[
-        "/",
         "/Applications",
         "/Library",
         "/System",
@@ -58,12 +93,14 @@ pub fn validate_path(path: &str) -> bool {
         "/var",
         "/private",
         "/opt",
+        "/Users",
+        "/Users/Shared",
     ];
-    let normalized_str = normalized.to_string_lossy();
-    if critical.contains(&normalized_str.as_ref()) || normalized_str == home {
+    if normalized == "/" || critical.contains(&normalized.as_str()) || normalized == home {
         return false;
     }
-    true
+    let home_apps = format!("{home}/Applications");
+    normalized != home_apps
 }
 
 /// 删除文件到回收站归档目录（CLI 版 deleteFiles，UndoManager.swift:62-174）
@@ -71,16 +108,16 @@ pub fn validate_path(path: &str) -> bool {
 /// - `urls`: 待删除路径（顺序无要求，原版为数组）
 /// - `bundle_name`: 归档目录名前缀（原版取 AppState.appInfo.appName，CLI 传应用名）
 pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult {
-    let valid: Vec<PathBuf> = urls
-        .iter()
-        .filter(|u| validate_path(&u.to_string_lossy()))
-        .cloned()
-        .collect();
-    let blocked: Vec<PathBuf> = urls
-        .iter()
-        .filter(|u| !validate_path(&u.to_string_lossy()))
-        .cloned()
-        .collect();
+    // 单次遍历分区（原版对每个 URL 校验两次）
+    let (valid, blocked): (Vec<PathBuf>, Vec<PathBuf>) = {
+        let (v, b): (Vec<&PathBuf>, Vec<&PathBuf>) = urls
+            .iter()
+            .partition(|u| validate_path(&u.to_string_lossy()));
+        (
+            v.into_iter().cloned().collect(),
+            b.into_iter().cloned().collect(),
+        )
+    };
 
     let mut result = DeleteResult {
         success: false,
@@ -137,6 +174,21 @@ pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult
                 trash_path: dest,
                 original_path: file.clone(),
             }),
+            // 跨卷（EXDEV）：rename 无法跨文件系统，回退为 copy + remove。
+            // 非原子（中断可能留下副本）—— 但回收站通常与源同卷，仅跨卷文件走此路径。
+            Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+                if file.is_file()
+                    && std::fs::copy(file, &dest).is_ok()
+                    && std::fs::remove_file(file).is_ok()
+                {
+                    result.moved.push(FilePair {
+                        trash_path: dest,
+                        original_path: file.clone(),
+                    });
+                } else {
+                    result.failed.push(file.clone());
+                }
+            }
             Err(_) => result.failed.push(file.clone()),
         }
     }
@@ -202,14 +254,35 @@ mod tests {
         assert!(!validate_path("/Library"));
         assert!(!validate_path("/System"));
         assert!(!validate_path("/Applications"));
-        // 原版只拦截"精确匹配"系统路径，子路径（如 /usr/local）放行
+        // 子路径（如 /usr/local）放行 —— 是合法删除目标
         assert!(validate_path("/usr/local"));
         let home = std::env::var("HOME").unwrap();
         assert!(!validate_path(&home));
+        assert!(!validate_path(&format!("{home}/Applications")));
         assert!(validate_path(&format!(
             "{home}/Library/Preferences/com.test.plist"
         )));
         assert!(validate_path("/tmp/foo"));
+    }
+
+    /// 归一化绕过用例：`..` / `//` / 尾部斜杠 拼出的字符串必须等效于 critical 条目
+    #[test]
+    fn test_validate_path_bypass_normalization() {
+        assert!(!validate_path("/Users/../Library")); // → /Library
+        assert!(!validate_path("/System/")); // 尾部斜杠
+        assert!(!validate_path("//Applications")); // 重复分隔符
+        assert!(!validate_path("/Library/..")); // → /
+        assert!(!validate_path("/usr/..")); // → /
+        assert!(!validate_path("/Users")); // 新增 critical
+        assert!(!validate_path("/Users/Shared")); // 新增 critical
+                                                  // 相对路径 → 拦截（删除列表必须绝对）
+        assert!(!validate_path("Library"));
+        assert!(!validate_path(".."));
+        // 归一化后仍是合法子路径 → 放行
+        assert!(validate_path(
+            "/Users/u/Library/Application Support/Foo/Bar.txt"
+        ));
+        assert!(validate_path("/tmp/foo/../bar"));
     }
 
     #[test]

@@ -94,9 +94,11 @@ impl AppMetadata for FallbackAdapter {
 }
 
 impl Trash for FallbackAdapter {
-    /// XDG trash 目录（规范中 home trash 固定位于 ~/.local/share/Trash）
+    /// XDG trash 目录（XDG 规范允许 $XDG_DATA_HOME/Trash 覆盖，缺省 ~/.local/share/Trash）
     fn trash_dir(&self) -> PathBuf {
-        PathBuf::from(format!("{}/.local/share/Trash", self.home))
+        let data_home = std::env::var("XDG_DATA_HOME")
+            .unwrap_or_else(|_| format!("{}/.local/share", self.home));
+        PathBuf::from(data_home).join("Trash")
     }
 }
 

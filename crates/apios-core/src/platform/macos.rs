@@ -9,7 +9,6 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::{AppMetadata, DevEnvPaths, ProcessControl, SpotlightIndex, SystemPaths, Trash};
-use crate::app_info;
 use crate::dev_env::DevEnv;
 use crate::format::pear_format;
 use crate::model::{AppInfo, Sensitivity};
@@ -34,24 +33,24 @@ impl MacOsAdapter {
 }
 
 /// getconf DARWIN_USER_CACHE_DIR / DARWIN_USER_TEMP_DIR
+/// darwin 用户缓存/临时目录（原版 getconf DARWIN_USER_*）。
+/// 直接调 /usr/bin/getconf —— 原版经 `bash -c "echo $(getconf ...) ..."` 包装，
+/// 多一层 shell 且输出拼接脆弱，无必要。
 fn darwin_ct() -> (String, String) {
-    let output = Command::new("/bin/bash")
-        .args([
-            "-c",
-            "echo $(getconf DARWIN_USER_CACHE_DIR) $(getconf DARWIN_USER_TEMP_DIR)",
-        ])
+    (
+        getconf("DARWIN_USER_CACHE_DIR"),
+        getconf("DARWIN_USER_TEMP_DIR"),
+    )
+}
+
+fn getconf(key: &str) -> String {
+    Command::new("/usr/bin/getconf")
+        .arg(key)
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string());
-
-    if let Some(output) = output {
-        let parts: Vec<&str> = output.split(' ').collect();
-        if parts.len() >= 2 {
-            return (parts[0].trim().to_string(), parts[1].trim().to_string());
-        }
-    }
-    (String::new(), String::new())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 /// 排除表 + 正则 `\bcom\.apple\b` —— 对应 listAppSupportDirectories 的 exclusions
@@ -185,6 +184,8 @@ impl SystemPaths for MacOsAdapter {
             apps_paths.push(format!("{home}/Library/Application Support/{folder}"));
         }
 
+        // 过滤空条目（cache_dir/temp_dir 获取失败时为空字符串 → read_dir("") 白跑）
+        apps_paths.retain(|p| !p.is_empty());
         apps_paths
     }
 
@@ -368,39 +369,64 @@ impl Trash for MacOsAdapter {
     }
 }
 
-/// 运行中的进程数（pgrep -x 精确匹配进程名；macOS pgrep 无 -c 计数选项 → 按行数统计，
-/// 无匹配时退出码 1 即 0）
-fn count_processes(name: &str) -> u32 {
-    let Ok(out) = Command::new("pgrep").args(["-x", name]).output() else {
-        return 0;
+/// 解析 `ps -axo pid=,args=` 输出，返回 argv[0] 以 bundle_prefix 开头的进程 PID。
+/// 纯函数（fixture 单测）：bundle 前缀匹配覆盖主进程与 Helper 子进程
+/// （argv[0] 都是 bundle 内路径），排除同名无关应用（多个 Electron 系应用互不干扰）。
+fn parse_ps_bundle_pids(output: &str, bundle_prefix: &str) -> Vec<u32> {
+    let mut pids = Vec::new();
+    for line in output.lines() {
+        let mut fields = line.trim_start().splitn(2, char::is_whitespace);
+        let (Some(pid), Some(args)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let Ok(pid) = pid.parse::<u32>() else {
+            continue;
+        };
+        // args 首 token 是 argv[0]（可执行路径）；bundle 前缀匹配
+        if args.starts_with(bundle_prefix) {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
+/// 运行中的 bundle 进程列表（ps 遍历；ps 失败/退出码非零 → 空）
+fn running_bundle_pids(bundle_prefix: &str) -> Vec<u32> {
+    let Ok(out) = Command::new("ps").args(["-axo", "pid=,args="]).output() else {
+        return Vec::new();
     };
     if !out.status.success() {
-        return 0;
+        return Vec::new();
     }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .count()
-        .try_into()
-        .unwrap_or(0)
+    parse_ps_bundle_pids(&String::from_utf8_lossy(&out.stdout), bundle_prefix)
 }
 
 impl ProcessControl for MacOsAdapter {
-    /// killApp 移植（原版 GUI 用 NSRunningApplication terminate）：
-    /// 按 CFBundleExecutable（进程名）pgrep 计数 → killall SIGTERM 优雅终止
+    /// killApp 移植（原版 GUI 用 NSRunningApplication terminate）。
+    /// 按 **bundle 路径前缀**限定进程（ps argv[0] 匹配），逐个 kill -TERM 优雅终止；
+    /// 返回实际终止数（kill 后复查存活，复查失败按 0 计）。
+    ///
+    /// 修原版/旧实现两处缺陷：
+    /// - `killall <可执行名>` 会连带终止所有同名进程（VS Code/Slack/Discord 的
+    ///   可执行名都是 "Electron"）——bundle 前缀只命中本 app 的进程；
+    /// - `pgrep -x` 受 macOS 进程名 15 字符截断限制（长可执行名永远匹配不到）——
+    ///   argv[0] 完整路径匹配不受此限。
     fn kill_running_app(&self, app: &AppInfo) -> u32 {
-        // 进程名取 CFBundleExecutable（app_name 是显示名，可能 ≠ 可执行文件，
-        // 如 "Visual Studio Code" 的可执行文件是 "Electron"）
-        let executable = app_info::get_executable_name(&app.path)
-            .filter(|e| !e.is_empty())
-            .unwrap_or_else(|| app.app_name.clone());
-
-        let count = count_processes(&executable);
-        if count > 0 {
-            let _ = Command::new("killall").args(["-q", &executable]).status();
-            // 给进程退出留时间，降低随后的文件移动失败概率
-            std::thread::sleep(Duration::from_millis(200));
+        let prefix = format!("{}/", app.path.to_string_lossy());
+        let running = running_bundle_pids(&prefix);
+        if running.is_empty() {
+            return 0;
         }
-        count
+        for pid in &running {
+            let _ = Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+        // 给进程退出留时间，降低随后的文件移动失败概率
+        std::thread::sleep(Duration::from_millis(200));
+        let still = running_bundle_pids(&prefix);
+        let survived = still.iter().filter(|p| running.contains(p)).count() as u32;
+        (running.len() as u32).saturating_sub(survived)
     }
 }
 
@@ -622,28 +648,44 @@ impl SpotlightIndex for MacOsAdapter {
             return Vec::new();
         };
 
-        // mdfind 毫秒级完成；索引重建时可能挂起 → 原版 5s 超时语义（线程 + recv_timeout）
-        let (tx, rx) = std::sync::mpsc::channel();
-        let home = self.home.clone();
-        std::thread::spawn(move || {
-            let output = Command::new("mdfind")
-                .args(["-onlyin", &home, &predicate])
-                .output();
-            let _ = tx.send(output);
-        });
-        // channel 元素即 Result<Output>；recv_timeout 失败（超时）或命令失败 → 空结果
-        let output = rx
-            .recv_timeout(Duration::from_secs(5))
-            .ok()
-            .and_then(|r| r.ok());
-        let Some(output) = output else {
+        // mdfind 毫秒级完成；索引重建时可能挂起 → 原版 5s 超时语义。
+        // 实现：spawn 子进程 + try_wait 轮询（不用脱离线程 —— 原版线程 + recv_timeout
+        // 超时后线程与 mdfind 进程继续泄漏）；超时 kill + wait 回收。
+        let mut child = match Command::new("mdfind")
+            .args(["-onlyin", &self.home, &predicate])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+        let start = std::time::Instant::now();
+        let mut status: Option<std::process::ExitStatus> = None;
+        while status.is_none() && start.elapsed() < Duration::from_secs(5) {
+            match child.try_wait() {
+                Ok(Some(s)) => status = Some(s),
+                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                Err(_) => return Vec::new(),
+            }
+        }
+        let Some(status) = status else {
+            let _ = child.kill(); // 超时：终止进程，防泄漏
+            let _ = child.wait();
             return Vec::new();
         };
-        if !output.status.success() {
+        if !status.success() {
             return Vec::new();
         }
 
-        let paths: Vec<PathBuf> = String::from_utf8_lossy(&output.stdout)
+        let mut stdout = String::new();
+        let read_ok = match child.stdout.take() {
+            Some(mut o) => std::io::Read::read_to_string(&mut o, &mut stdout).is_ok(),
+            None => false,
+        };
+        if !read_ok {
+            return Vec::new();
+        }
+        let paths: Vec<PathBuf> = stdout
             .lines()
             .filter(|l| !l.trim().is_empty())
             .map(PathBuf::from)
@@ -757,9 +799,38 @@ mod tests {
     }
 
     #[test]
-    fn test_count_processes_none_running() {
-        // 不存在的进程名 → 0（不误杀任何进程）
-        assert_eq!(count_processes("nonexistent-proc-zzz-xyz"), 0);
+    fn test_parse_ps_bundle_pids_matches_only_bundle() {
+        let out = "    1 /sbin/launchd\n\
+            123 /Applications/Foo.app/Contents/MacOS/Foo --flag arg\n\
+            456 /Applications/Foo.app/Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper\n\
+            789 /Applications/Bar.app/Contents/MacOS/Bar\n\
+            111 /Applications/FooBar.app/Contents/MacOS/FooBar\n";
+        // 前缀匹配：bundle 内主进程 + Helper 命中；同名无关应用（Bar）与
+        // 前缀近似的其他 bundle（FooBar）排除
+        let pids = parse_ps_bundle_pids(out, "/Applications/Foo.app/");
+        assert_eq!(pids, vec![123, 456]);
+    }
+
+    #[test]
+    fn test_parse_ps_bundle_pids_malformed_lines_skipped() {
+        let out = "not-a-pid /Applications/Foo.app/x\n\n  abc def\n1234\n";
+        assert!(parse_ps_bundle_pids(out, "/Applications/Foo.app/").is_empty());
+    }
+
+    #[test]
+    fn test_kill_running_app_none_running() {
+        // 不存在的 bundle → 0（不误杀任何进程）
+        let app = AppInfo {
+            path: PathBuf::from("/Applications/nonexistent-app-zzz.app"),
+            bundle_identifier: "x".to_string(),
+            app_name: "x".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+        assert_eq!(MacOsAdapter::new().kill_running_app(&app), 0);
     }
 
     #[test]

@@ -24,13 +24,16 @@ use super::{PackageManager, PackageManagers};
 use crate::pkg::{self, PkgInfo, PkgKind};
 
 /// 探测候选位置：Apple Silicon /opt/homebrew、Intel /usr/local、PATH
+/// （PATH 空段（`:x::y:`）会生成相对路径 "./brew" —— 过滤为仅绝对路径）
 fn brew_candidates(path: &str) -> Vec<PathBuf> {
     let mut candidates = vec![
         PathBuf::from("/opt/homebrew/bin/brew"),
         PathBuf::from("/usr/local/bin/brew"),
     ];
     for dir in std::env::split_paths(path) {
-        candidates.push(dir.join("brew"));
+        if dir.is_absolute() {
+            candidates.push(dir.join("brew"));
+        }
     }
     candidates
 }
@@ -163,8 +166,11 @@ impl PackageManager for Homebrew {
     fn dependents(&self, name: &str, kind: PkgKind) -> Result<Vec<String>, String> {
         let args = uses_args(name);
         // 无视退出码：cask 参数在**有**依赖方时 brew exit 1（uses.rb:92 odie），
-        // 但 stdout 已完整输出；无依赖方时 stdout 为空。stderr 的
-        // "No available formula" 警告（cask 慢路径）按预期忽略。
+        // 但 stdout 已完整输出。区别对待"无依赖方"与"brew 调用失败"：
+        // - exit 0 → 正常（formula 无依赖方时 stdout 为空）
+        // - stdout 非空 → 无论退出码，直接解析（cask 有依赖方场景）
+        // - 空 stdout + 非零退出：stderr 是 cask 慢路径预期警告（"No available
+        //   formula"）→ 视为无依赖方；否则是真实失败 → Err
         let _ = kind;
         let output = self.run_ignore_status(
             args.iter()
@@ -172,9 +178,17 @@ impl PackageManager for Homebrew {
                 .collect::<Vec<_>>()
                 .as_slice(),
         )?;
-        Ok(pkg::parse_brew_uses(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let dependents = pkg::parse_brew_uses(&stdout);
+        if output.status.success() || !dependents.is_empty() {
+            return Ok(dependents);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("No available formula") {
+            return Ok(dependents);
+        }
+        let arg_strs: Vec<&str> = args.iter().map(String::as_str).collect();
+        Err(stderr_tail(&output, &arg_strs))
     }
 
     fn uninstall(
@@ -222,6 +236,21 @@ mod tests {
     #[test]
     fn test_brew_candidates_ordering() {
         let candidates = brew_candidates("/usr/bin:/bin");
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/opt/homebrew/bin/brew"),
+                PathBuf::from("/usr/local/bin/brew"),
+                PathBuf::from("/usr/bin/brew"),
+                PathBuf::from("/bin/brew"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_brew_candidates_filters_empty_segments() {
+        // PATH 空段 → 不得生成相对路径 "./brew"
+        let candidates = brew_candidates(":/usr/bin::/bin:");
         assert_eq!(
             candidates,
             vec![
