@@ -97,7 +97,7 @@ fn normalize_absolute(path: &str) -> Option<String> {
 
 /// 路径安全校验（UndoManager.swift:24-60）。
 /// 原版按原始字符串精确匹配 → `..`/`//`/尾部斜杠可绕过 critical 表；
-/// 这里先做词法归一化再匹配，并补充 /Users、/Users/Shared、{home}/Applications。
+/// 这里先做词法归一化再匹配，再叠加 home 根与（POSIX 专属）{home}/Applications。
 /// critical 表来自适配层（SystemPaths::critical_paths，平台路径数据归平台），
 /// 子路径（/usr/local、{home}/Library/...）仍放行 —— 是合法删除目标。
 pub fn validate_path(path: &str) -> bool {
@@ -295,13 +295,16 @@ mod tests {
     #[test]
     fn test_validate_path() {
         assert!(!validate_path("/"));
-        assert!(!validate_path("/Library"));
-        assert!(!validate_path("/System"));
-        assert!(!validate_path("/Applications"));
+        // critical 表来自适配层：当前平台的每一条根都必须拦截
+        for c in crate::platform::adapter().critical_paths() {
+            assert!(!validate_path(&c), "critical 根必须拦截: {c}");
+        }
         // 子路径（如 /usr/local）放行 —— 是合法删除目标
         assert!(validate_path("/usr/local"));
         let home = crate::platform::adapter().home();
         assert!(!validate_path(&home));
+        // {home}/Applications 仅 POSIX 拦截（Windows 无此结构，impl 已 cfg 门控）
+        #[cfg(not(windows))]
         assert!(!validate_path(&format!("{home}/Applications")));
         assert!(validate_path(&format!(
             "{home}/Library/Preferences/com.test.plist"
@@ -312,14 +315,21 @@ mod tests {
     /// 归一化绕过用例：`..` / `//` / 尾部斜杠 拼出的字符串必须等效于 critical 条目
     #[test]
     fn test_validate_path_bypass_normalization() {
-        assert!(!validate_path("/Users/../Library")); // → /Library
-        assert!(!validate_path("/System/")); // 尾部斜杠
-        assert!(!validate_path("//Applications")); // 重复分隔符
-        assert!(!validate_path("/Library/..")); // → /
-        assert!(!validate_path("/usr/..")); // → /
-        assert!(!validate_path("/Users")); // 新增 critical
-        assert!(!validate_path("/Users/Shared")); // 新增 critical
-                                                  // 相对路径 → 拦截（删除列表必须绝对）
+        // critical 根的归一化绕过：`..` 回根 / 尾部斜杠 / 重复分隔符 构造的等效
+        // 字符串必须拦截（逐项取自适配层表，三平台各测各的）
+        for c in crate::platform::adapter().critical_paths() {
+            // "/X/.." 归一化回根（POSIX 根或盘符根，独立于 critical 表）
+            assert!(!validate_path(&format!("{c}/..")), "归一化回根: {c}");
+            #[cfg(not(windows))]
+            {
+                assert!(!validate_path(&format!("{c}/")), "尾部斜杠: {c}");
+                assert!(
+                    !validate_path(&format!("//{}", c.trim_start_matches('/'))),
+                    "重复分隔符: {c}"
+                );
+            }
+        }
+        // 相对路径 → 拦截（删除列表必须绝对）
         assert!(!validate_path("Library"));
         assert!(!validate_path(".."));
         // 归一化后仍是合法子路径 → 放行
@@ -419,9 +429,10 @@ mod tests {
     fn test_delete_filters_blocked_paths() {
         // validate_path 过滤应生效（不会真正删任何东西 —— 直接测过滤函数）
         let home = crate::platform::adapter().home();
+        let critical = crate::platform::adapter().critical_paths();
         let urls = [
-            PathBuf::from("/Library"),
-            PathBuf::from(format!("{home}/Library/Preferences/x")),
+            PathBuf::from(&critical[0]), // critical 根必须被滤掉
+            PathBuf::from(format!("{home}/Library/Preferences/x")), // 正常子路径放行
         ];
         let valid: Vec<_> = urls
             .iter()
