@@ -120,7 +120,10 @@ mod tests {
         let home = crate::platform::adapter().home();
         let folders = default_app_folders(&home);
         assert!(!folders.is_empty());
-        // 首项恒为 {home}/Applications（macOS 与 XDG 形态一致）
+        // 首项含义随平台：macOS/XDG = {home}/Applications；Windows = Desktop
+        #[cfg(not(target_os = "windows"))]
         assert!(folders[0].ends_with("/Applications"));
+        #[cfg(target_os = "windows")]
+        assert!(folders[0].ends_with("Desktop"));
     }
 }
