@@ -17,7 +17,7 @@ use std::process::Command;
 
 use super::windows::WindowsAdapter;
 use super::{PackageManager, PackageManagers};
-use crate::pkg::{self, PkgInfo, PkgKind};
+use crate::pkg::{PkgInfo, PkgKind};
 
 /// 自动化环境必须的全局旗标（首次运行接受源协议 + 禁用交互，防卡死）
 const AUTOMATION_FLAGS: [&str; 2] = ["--accept-source-agreements", "--disable-interactivity"];

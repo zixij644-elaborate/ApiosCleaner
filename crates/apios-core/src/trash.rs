@@ -98,52 +98,37 @@ fn normalize_absolute(path: &str) -> Option<String> {
 /// 路径安全校验（UndoManager.swift:24-60）。
 /// 原版按原始字符串精确匹配 → `..`/`//`/尾部斜杠可绕过 critical 表；
 /// 这里先做词法归一化再匹配，并补充 /Users、/Users/Shared、{home}/Applications。
+/// critical 表来自适配层（SystemPaths::critical_paths，平台路径数据归平台），
 /// 子路径（/usr/local、{home}/Library/...）仍放行 —— 是合法删除目标。
 pub fn validate_path(path: &str) -> bool {
     let Some(normalized) = normalize_absolute(path) else {
         return false;
     };
-    let home = crate::platform::adapter().home();
-    #[cfg(windows)]
+    let adapter = crate::platform::adapter();
+    let home = adapter.home();
+    // 盘符根格式检测（`X:\` 长度为 3，Windows 专属形态；格式检测而非硬编码盘符，
+    // 防非 C: 系统）。`/` 是 POSIX 根；Windows 上归一化出 `/` 的根相对路径
+    // （如 `\Windows` → `/Windows`）不在此形态内，但不会来自删除列表的路径表。
+    let drive_root = normalized.len() == 3
+        && normalized.as_bytes()[1] == b':'
+        && normalized.as_bytes()[2] == b'\\';
+    if drive_root
+        || normalized == "/"
+        || adapter.critical_paths().contains(&normalized)
+        || normalized == home
     {
-        // Windows critical 表：环境变量驱动（防非 C: 系统），盘符根用格式检测兜底。
-        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
-        let program_files =
-            std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".into());
-        let program_files_x86 =
-            std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".into());
-        let program_data =
-            std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".into());
-        let critical = [system_root, program_files, program_files_x86, program_data];
-        let drive_root = normalized.len() == 3
-            && normalized.as_bytes()[1] == b':'
-            && normalized.as_bytes()[2] == b'\\';
-        if drive_root || critical.contains(&normalized) || normalized == home {
-            return false;
-        }
-        true
+        return false;
     }
+    // 仅 POSIX：{home}/Applications 是受保护区（home 下唯一整体保护的应用目录；
+    // Windows 用户目录无此结构，不拦）
     #[cfg(not(windows))]
     {
-        let critical: &[&str] = &[
-            "/Applications",
-            "/Library",
-            "/System",
-            "/usr",
-            "/bin",
-            "/sbin",
-            "/etc",
-            "/var",
-            "/private",
-            "/opt",
-            "/Users",
-            "/Users/Shared",
-        ];
-        if normalized == "/" || critical.contains(&normalized.as_str()) || normalized == home {
-            return false;
-        }
         let home_apps = format!("{home}/Applications");
         normalized != home_apps
+    }
+    #[cfg(windows)]
+    {
+        true
     }
 }
 

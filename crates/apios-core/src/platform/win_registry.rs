@@ -20,6 +20,8 @@ const REG_EXPAND_SZ: u32 = 2;
 const UNINSTALL_SUBKEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
 
 extern "system" {
+    // 写入 API 仅测试用（HKCU 临时键集成测试），生产只读
+    #[cfg(test)]
     fn RegCreateKeyExW(
         key: isize,
         sub_key: *const u16,
@@ -31,6 +33,7 @@ extern "system" {
         out: *mut isize,
         _disposition: *mut u32,
     ) -> i32;
+    #[cfg(test)]
     fn RegSetValueExW(
         key: isize,
         name: *const u16,
@@ -39,6 +42,7 @@ extern "system" {
         data: *const u8,
         len: u32,
     ) -> i32;
+    #[cfg(test)]
     fn RegDeleteKeyW(key: isize, sub_key: *const u16) -> i32;
     fn RegOpenKeyExW(
         key: isize,

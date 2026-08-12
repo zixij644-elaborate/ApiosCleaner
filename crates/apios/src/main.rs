@@ -62,12 +62,14 @@ fn trash_label() -> &'static str {
 fn deleted_message(count: usize, bundle_folder: &std::path::Path) -> String {
     #[cfg(target_os = "windows")]
     {
-        format!("Deleted {count} files to Recycle Bin")
+        let _ = bundle_folder;
+        format!("Deleted {count} files to {}", trash_label())
     }
     #[cfg(not(target_os = "windows"))]
     {
         format!(
-            "Deleted {count} files to Trash ({})",
+            "Deleted {count} files to {} ({})",
+            trash_label(),
             bundle_folder.display()
         )
     }

@@ -227,6 +227,26 @@ impl SystemPaths for MacOsAdapter {
     fn app_support_subdirs(&self) -> Vec<String> {
         list_app_support_directories(&self.home)
     }
+
+    fn critical_paths(&self) -> Vec<String> {
+        [
+            "/Applications",
+            "/Library",
+            "/System",
+            "/usr",
+            "/bin",
+            "/sbin",
+            "/etc",
+            "/var",
+            "/private",
+            "/opt",
+            "/Users",
+            "/Users/Shared",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
 }
 
 impl AppMetadata for MacOsAdapter {

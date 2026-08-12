@@ -81,6 +81,18 @@ impl SystemPaths for FallbackAdapter {
     fn app_support_subdirs(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Linux 系统保护区（对齐 macOS 精神；~/.local/share 等用户目录根不整体保护，
+    /// 只有 {home}/Applications 由 validate_path 的 POSIX 分支额外拦截）
+    fn critical_paths(&self) -> Vec<String> {
+        [
+            "/bin", "/boot", "/dev", "/etc", "/lib", "/opt", "/proc", "/root", "/run", "/sbin",
+            "/snap", "/srv", "/sys", "/usr", "/var",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
 }
 
 impl AppMetadata for FallbackAdapter {

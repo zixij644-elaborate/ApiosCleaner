@@ -37,6 +37,10 @@ pub trait SystemPaths {
     fn reverse_paths(&self) -> Vec<String>;
     /// 应用支持目录下的子目录列表（深度搜索）
     fn app_support_subdirs(&self) -> Vec<String>;
+    /// 系统保护区根目录（trash.rs::validate_path 用）。不含用户主目录 —— 主目录
+    /// 由 validate_path 统一用 home() 比较。Windows 环境变量驱动（防非 C: 系统），
+    /// POSIX 静态表。表中只列目录根，其子路径仍是合法删除目标。
+    fn critical_paths(&self) -> Vec<String>;
 }
 
 /// 应用元数据提取（每平台机制不同：macOS codesign / Linux desktop 文件 / Windows 注册表）

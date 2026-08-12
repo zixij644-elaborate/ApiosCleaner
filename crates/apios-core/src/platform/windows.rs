@@ -37,6 +37,7 @@ pub struct WindowsAdapter {
     program_files: String,
     program_files_x86: String,
     temp_dir: String,
+    system_root: String,
 }
 
 impl WindowsAdapter {
@@ -54,6 +55,7 @@ impl WindowsAdapter {
             program_files: env("ProgramFiles", "C:\\Program Files"),
             program_files_x86: env("ProgramFiles(x86)", "C:\\Program Files (x86)"),
             temp_dir: env("TEMP", &format!("{home}\\AppData\\Local\\Temp")),
+            system_root: env("SystemRoot", "C:\\Windows"),
             home,
         }
     }
@@ -120,6 +122,17 @@ impl SystemPaths for WindowsAdapter {
             }
         }
         out
+    }
+
+    /// 系统保护区根目录：环境变量驱动（防非 C: 系统），缺省回退标准安装目录。
+    /// 盘符根（`X:\`）不在表中 —— 形态固定（长度 3），由 validate_path 格式检测兜底。
+    fn critical_paths(&self) -> Vec<String> {
+        vec![
+            self.system_root.clone(),
+            self.program_files.clone(),
+            self.program_files_x86.clone(),
+            self.programdata.clone(),
+        ]
     }
 }
 
