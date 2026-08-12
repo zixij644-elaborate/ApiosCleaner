@@ -1032,6 +1032,8 @@ fn cmd_plugins(cli: &Cli, category: Option<&str>, clean: Option<&str>) {
             .flat_map(|(_, list)| list)
             .map(|p| p.path.clone())
             .collect();
+        // 与其他删除命令一致的受保护文件检查（sudo 提示），防 read-only 插件误删
+        check_protected(&paths, "apios plugins --clean");
         let result = delete_files(&paths, Some(&format!("Plugins ({count} items)")));
         if result.success {
             println!(
@@ -1234,7 +1236,11 @@ fn cmd_lipo_thin(cli: &Cli, arg: &str, sign: bool) {
         return;
     }
 
-    let total_free: u64 = plan.iter().map(|(_, _, s, len)| len - s.size).sum();
+    // saturating：异常 fat 文件（metadata len < slice size）不得下溢 panic
+    let total_free: u64 = plan
+        .iter()
+        .map(|(_, _, s, len)| len.saturating_sub(s.size))
+        .sum();
     let target_name = cpu_name(current_cputype(), 0);
     println!(
         "{} universal binary(ies) will be thinned to {}:",

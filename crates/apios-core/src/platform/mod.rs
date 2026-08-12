@@ -148,6 +148,18 @@ mod windows;
 #[cfg(target_os = "windows")]
 mod winget;
 
+/// home 规范化：剥尾部路径分隔符。`$HOME/` 形态会让 home 根拦截
+/// （validate_path `normalized == home`）与 `{home}/...` 子串比较失效；
+/// 根 `/` 或空串保持原样（剥空回退原文，避免 home 变空串）。
+pub(crate) fn normalize_home(home: &str) -> String {
+    let trimmed = home.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        home.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// 当前平台的适配器类型（cfg 编译期选择）
 #[cfg(target_os = "macos")]
 pub type Adapter = macos::MacOsAdapter;

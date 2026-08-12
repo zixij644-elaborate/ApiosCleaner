@@ -43,11 +43,11 @@ pub struct WindowsAdapter {
 impl WindowsAdapter {
     pub fn new() -> Self {
         // USERPROFILE 缺失时回退 HOMEDRIVE+HOMEPATH（如 "C:" + "\Users\x"）
-        let home = env("USERPROFILE", &{
+        let home = crate::platform::normalize_home(&env("USERPROFILE", &{
             let d = env("HOMEDRIVE", "C:");
             let p = env("HOMEPATH", "\\Users");
             format!("{d}{p}")
-        });
+        }));
         WindowsAdapter {
             appdata_roaming: env("APPDATA", &format!("{home}\\AppData\\Roaming")),
             appdata_local: env("LOCALAPPDATA", &format!("{home}\\AppData\\Local")),

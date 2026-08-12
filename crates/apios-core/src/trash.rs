@@ -23,6 +23,11 @@ use crate::platform::{SystemPaths, Trash};
 pub fn is_writable(path: &Path) -> bool {
     #[cfg(not(windows))]
     {
+        // root 恒可写：libc::access 使用 real uid（setuid/sudo 下 effective uid
+        // 是 0 而 real uid 是调用者），会误报受保护 → sudo 流程失效
+        if unsafe { libc::geteuid() == 0 } {
+            return true;
+        }
         let parent = path.parent().unwrap_or_else(|| Path::new("/"));
         let Ok(c_path) = std::ffi::CString::new(parent.to_string_lossy().as_bytes()) else {
             return false;

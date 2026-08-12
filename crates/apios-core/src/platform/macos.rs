@@ -26,7 +26,9 @@ pub struct MacOsAdapter {
 
 impl MacOsAdapter {
     pub fn new() -> Self {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/".to_string());
+        let home = crate::platform::normalize_home(
+            &std::env::var("HOME").unwrap_or_else(|_| "/Users/".to_string()),
+        );
         let (cache_dir, temp_dir) = darwin_ct();
         MacOsAdapter {
             home,

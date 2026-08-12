@@ -107,7 +107,13 @@ pub fn parse_winget_list(output: &str) -> Vec<PkgInfo> {
         if cells.len() > vi {
             pkgs.push(PkgInfo {
                 name: cells[0].to_string(),
-                version: cells[vi].to_string(),
+                // 版本规范化：winget 在部分版本输出 `> x.y.z`（表示有可用更新，
+                // 不是版本号）—— 剥掉前缀保留真实版本。`Unknown` 保留原样
+                // （winget 确实不知道版本，剥成空串反而丢信息）
+                version: cells[vi]
+                    .strip_prefix("> ")
+                    .unwrap_or(cells[vi])
+                    .to_string(),
                 kind: PkgKind::Formula,
             });
         }
@@ -230,6 +236,19 @@ mod tests {
         let pkgs = parse_winget_list(out);
         assert_eq!(pkgs.len(), 1);
         assert_eq!(pkgs[0].name, "Foo");
+    }
+
+    #[test]
+    fn test_parse_list_normalizes_version_prefix() {
+        // 部分 winget 版本输出 `> x.y.z`（有可用更新）—— 剥前缀保留真实版本
+        let out =
+            "Name  Id  Version  Available  Source\n-------  ----  -------  ---------  ------\n\
+            Foo    foo.id  > 1.2.3   1.2.4      winget\n\
+            Bar    bar.id  Unknown             winget\n";
+        let pkgs = parse_winget_list(out);
+        assert_eq!(pkgs[0].version, "1.2.3");
+        // Unknown 保留原样（winget 确实不知道版本）
+        assert_eq!(pkgs[1].version, "Unknown");
     }
 
     #[test]

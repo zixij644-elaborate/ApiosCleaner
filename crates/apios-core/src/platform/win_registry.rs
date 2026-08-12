@@ -14,6 +14,7 @@ const HKEY_CURRENT_USER: isize = -2147483647;
 /// KEY_READ = STANDARD_RIGHTS_READ | KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS | KEY_NOTIFY
 const KEY_READ: u32 = 0x0002_0019;
 const ERROR_NO_MORE_ITEMS: i32 = 259;
+const ERROR_MORE_DATA: i32 = 234;
 const REG_SZ: u32 = 1;
 const REG_EXPAND_SZ: u32 = 2;
 
@@ -148,10 +149,20 @@ pub fn entry_from_values(
         }
     };
     let display_name = get("DisplayName").filter(|n| !n.is_empty())?;
+    // DisplayIcon 常见 "C:\...\x.exe,0" 形态（图标索引后缀）—— 剥掉数字索引，
+    // 否则带 ",0" 的路径 is_file() 恒 false，条目被误判"已卸载"丢弃。
+    // 只剥纯数字后缀：路径本身含逗号（少见）时 rsplit 不会误伤（过滤非数字段）
+    let display_icon = get("DisplayIcon").map(|s| {
+        let s = strip_quotes(&s);
+        s.rsplit_once(',')
+            .filter(|(_, idx)| !idx.is_empty() && idx.chars().all(|c| c.is_ascii_digit()))
+            .map(|(p, _)| p.to_string())
+            .unwrap_or(s)
+    });
     Some(UninstallEntry {
         display_name,
         install_location: get("InstallLocation").map(|s| strip_quotes(&s)),
-        display_icon: get("DisplayIcon").map(|s| strip_quotes(&s)),
+        display_icon,
         publisher: get("Publisher"),
         uninstall_string: get("UninstallString").map(|s| strip_quotes(&s)),
     })
@@ -205,9 +216,10 @@ fn enum_uninstall_at(hive: isize, subkey: &str) -> Vec<UninstallEntry> {
 
     let mut out = Vec::new();
     let mut index: u32 = 0;
+    // 循环外分配（复用容量；ERROR_MORE_DATA 扩容保留）
+    let mut name_buf = vec![0u16; 512];
     loop {
-        let mut name_buf = vec![0u16; 512];
-        let mut name_len: u32 = 512;
+        let mut name_len: u32 = name_buf.len() as u32;
         let rc = unsafe {
             RegEnumKeyExW(
                 root,
@@ -223,10 +235,38 @@ fn enum_uninstall_at(hive: isize, subkey: &str) -> Vec<UninstallEntry> {
         if rc == ERROR_NO_MORE_ITEMS {
             break;
         }
-        if rc != 0 {
-            break;
+        if rc == ERROR_MORE_DATA {
+            // 键名超当前缓冲（>512 字符，罕见）：按返回的所需长度扩容重试一次
+            name_buf.resize(name_len as usize + 1, 0);
+            let mut retry_len = name_buf.len() as u32;
+            let rc2 = unsafe {
+                RegEnumKeyExW(
+                    root,
+                    index,
+                    name_buf.as_mut_ptr(),
+                    &mut retry_len,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if rc2 == ERROR_NO_MORE_ITEMS {
+                break;
+            }
+            if rc2 != 0 {
+                index += 1;
+                continue;
+            }
+            index += 1;
+        } else if rc != 0 {
+            // 其他枚举错误（单个子键权限等）→ 跳过该索引继续；此前直接 break
+            // 会丢掉剩余全部卸载项
+            index += 1;
+            continue;
+        } else {
+            index += 1;
         }
-        index += 1;
 
         let key_name = narrow(&name_buf);
         // 打开子键读值（部分卸载项仅系统可读，失败跳过）
@@ -335,6 +375,32 @@ mod tests {
         assert_eq!(
             entry.uninstall_string.as_deref(),
             Some(r"C:\Program Files\Tencent\Weixin\Uninstall.exe")
+        );
+    }
+
+    #[test]
+    fn test_entry_strips_icon_index_from_display_icon() {
+        // DisplayIcon 常见 "exe,0" 形态：数字索引后缀剥掉，否则 is_file 恒 false
+        let mut values = std::collections::HashMap::new();
+        values.insert("DisplayName".into(), sz("Foo"));
+        values.insert(
+            "DisplayIcon".into(),
+            sz(r#""C:\Program Files\Foo\Foo.exe",0"#),
+        );
+        let entry = entry_from_values(&values).unwrap();
+        assert_eq!(
+            entry.display_icon.as_deref(),
+            Some(r"C:\Program Files\Foo\Foo.exe")
+        );
+
+        // 非数字后缀（路径真含逗号）不剥
+        let mut values2 = std::collections::HashMap::new();
+        values2.insert("DisplayName".into(), sz("Foo"));
+        values2.insert("DisplayIcon".into(), sz(r"C:\odd\,path\Foo.exe"));
+        let entry2 = entry_from_values(&values2).unwrap();
+        assert_eq!(
+            entry2.display_icon.as_deref(),
+            Some(r"C:\odd\,path\Foo.exe")
         );
     }
 

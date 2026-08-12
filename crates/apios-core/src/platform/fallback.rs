@@ -25,7 +25,7 @@ pub struct FallbackAdapter {
 
 impl FallbackAdapter {
     pub fn new() -> Self {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::platform::normalize_home(&std::env::var("HOME").unwrap_or_default());
         // XDG Base Directory 规范
         let cache_dir =
             std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| format!("{home}/.cache"));
