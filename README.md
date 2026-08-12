@@ -1,3 +1,5 @@
+[English](README.md) | [中文](README.zh-CN.md)
+
 # ApiosCleaner
 
 *ἄπιος (ápios) — ancient Greek for "pear"*
