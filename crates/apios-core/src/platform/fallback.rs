@@ -8,8 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{AppMetadata, SpotlightIndex, SystemPaths, Trash};
-use crate::model::Sensitivity;
+use super::{AppMetadata, ProcessControl, SpotlightIndex, SystemPaths, Trash};
+use crate::model::{AppInfo, Sensitivity};
 
 /// 非 macOS 平台的基础适配器（当前按 Linux XDG 约定提供默认值）
 pub struct FallbackAdapter {
@@ -105,5 +105,12 @@ impl SpotlightIndex for FallbackAdapter {
         _sensitivity: Sensitivity,
     ) -> Vec<PathBuf> {
         Vec::new()
+    }
+}
+
+impl ProcessControl for FallbackAdapter {
+    /// 尚未实现：Linux pkill（注意 15 字符进程名截断）、Windows taskkill —— 平台适配 TODO
+    fn kill_running_app(&self, _app: &AppInfo) -> u32 {
+        0
     }
 }

@@ -8,9 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use super::{AppMetadata, SpotlightIndex, SystemPaths, Trash};
+use super::{AppMetadata, ProcessControl, SpotlightIndex, SystemPaths, Trash};
+use crate::app_info;
 use crate::format::pear_format;
-use crate::model::Sensitivity;
+use crate::model::{AppInfo, Sensitivity};
 
 /// macOS 平台适配器
 pub struct MacOsAdapter {
@@ -366,6 +367,42 @@ impl Trash for MacOsAdapter {
     }
 }
 
+/// 运行中的进程数（pgrep -x 精确匹配进程名；macOS pgrep 无 -c 计数选项 → 按行数统计，
+/// 无匹配时退出码 1 即 0）
+fn count_processes(name: &str) -> u32 {
+    let Ok(out) = Command::new("pgrep").args(["-x", name]).output() else {
+        return 0;
+    };
+    if !out.status.success() {
+        return 0;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .count()
+        .try_into()
+        .unwrap_or(0)
+}
+
+impl ProcessControl for MacOsAdapter {
+    /// killApp 移植（原版 GUI 用 NSRunningApplication terminate）：
+    /// 按 CFBundleExecutable（进程名）pgrep 计数 → killall SIGTERM 优雅终止
+    fn kill_running_app(&self, app: &AppInfo) -> u32 {
+        // 进程名取 CFBundleExecutable（app_name 是显示名，可能 ≠ 可执行文件，
+        // 如 "Visual Studio Code" 的可执行文件是 "Electron"）
+        let executable = app_info::get_executable_name(&app.path)
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| app.app_name.clone());
+
+        let count = count_processes(&executable);
+        if count > 0 {
+            let _ = Command::new("killall").args(["-q", &executable]).status();
+            // 给进程退出留时间，降低随后的文件移动失败概率
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        count
+    }
+}
+
 /// NSPredicate 字符串转义：单引号 → ''（SQL 风格，Spotlight 查询语法）
 fn escape_predicate_value(value: &str) -> String {
     value.replace('\'', "''")
@@ -506,6 +543,12 @@ mod tests {
             p,
             "kMDItemDisplayName == 'It''s App'cd || kMDItemDisplayName == 'com.it.sapp'cd"
         );
+    }
+
+    #[test]
+    fn test_count_processes_none_running() {
+        // 不存在的进程名 → 0（不误杀任何进程）
+        assert_eq!(count_processes("nonexistent-proc-zzz-xyz"), 0);
     }
 
     #[test]

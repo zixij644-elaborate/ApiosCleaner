@@ -22,6 +22,7 @@ use apios_core::app_info::get_app_info;
 use apios_core::locations::Locations;
 use apios_core::model::{AppInfo, Sensitivity};
 use apios_core::orphan::ReversePathsSearcher;
+use apios_core::platform::ProcessControl;
 use apios_core::scan::{default_app_folders, get_sorted_apps};
 use apios_core::search::AppPathFinder;
 use apios_core::trash::{delete_files, is_writable};
@@ -214,6 +215,12 @@ fn cmd_uninstall(cli: &Cli, arg: &str) {
     if !confirm(cli, &format!("Delete {} files? ", found.len())) {
         println!("Aborted — nothing was deleted.");
         return;
+    }
+
+    // 确认后、删除前终止运行中的实例（killApp），避免文件占用导致删除失败
+    let killed = apios_core::platform::adapter().kill_running_app(&app);
+    if killed > 0 {
+        println!("Terminated {killed} running process(es).");
     }
 
     let result = delete_files(&found, Some(&app.app_name));

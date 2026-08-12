@@ -91,6 +91,14 @@ pub fn get_team_identifier(app_path: &Path) -> Option<String> {
     crate::platform::adapter().team_identifier(app_path)
 }
 
+/// CFBundleExecutable —— 进程名（killApp 精确匹配用；app_name 是显示名，可能 ≠ 可执行文件）
+pub fn get_executable_name(path: &Path) -> Option<String> {
+    read_info_plist(path)?
+        .get("CFBundleExecutable")
+        .and_then(|v| v.as_string())
+        .map(|s| s.to_string())
+}
+
 /// 容器元数据解析（AppPathsFetch.swift:143-183）：
 /// 扫描 ~/Library/Containers/<UUID>/.com.apple.containermanagerd.metadata.plist
 pub fn get_app_containers(home: &str, bundle_identifier: &str) -> Vec<PathBuf> {

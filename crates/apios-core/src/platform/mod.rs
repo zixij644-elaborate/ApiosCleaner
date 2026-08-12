@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::model::Sensitivity;
+use crate::model::{AppInfo, Sensitivity};
 
 /// 全盘索引补充查询（原版 spotlightSupplementalPaths，AppPathsFetch.swift:490-614）
 ///
@@ -50,6 +50,13 @@ pub trait AppMetadata {
 /// 回收站语义（macOS ~/.Trash / Linux XDG trash / Windows 回收站）
 pub trait Trash {
     fn trash_dir(&self) -> PathBuf;
+}
+
+/// 卸载前终止运行中的应用（原版 GUI 的 killApp；每平台机制不同：
+/// macOS pgrep/killall、Linux pkill、Windows taskkill）
+pub trait ProcessControl {
+    /// 终止应用进程，返回被终止的进程数（0 = 无运行实例）
+    fn kill_running_app(&self, app: &AppInfo) -> u32;
 }
 
 #[cfg(not(target_os = "macos"))]
