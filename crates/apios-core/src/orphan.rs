@@ -206,16 +206,40 @@ impl ReversePathsSearcher {
             return;
         }
 
-        // Windows 内置兼容 junction（AppData\Local\Application Data、
-        // ProgramData\Documents 等，系统 ReparsePoint）—— 每台系统都有、
-        // 永不被应用引用，列为孤儿是 100% 误报（clean-orphan 会诱删）。
-        // 真实应用残留是普通文件/目录，junction 只有系统兼容机制在用。
+        // Windows 系统目录过滤（clean-orphan 会真删，系统目录是危险面）：
+        // - junction（AppData\Local\Application Data、ProgramData\Documents 等
+        //   系统 ReparsePoint）每台系统都有、永不被引用 —— 100% 误报
+        // - AppData/ProgramData 一级子项里的系统/结构目录（应用安装根、
+        //   系统临时目录、UWP 包目录、系统组件数据）—— 删除破坏系统与已装应用。
+        //   名单按名字匹配（大小写不敏感），与父目录无关（名字语义稳定）
         #[cfg(target_os = "windows")]
-        if std::fs::symlink_metadata(path)
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
         {
-            return;
+            if std::fs::symlink_metadata(path)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                return;
+            }
+            const WINDOWS_SYSTEM_DIRS: [&str; 15] = [
+                "packages",
+                "programs",
+                "temp",
+                "virtualstore",
+                "connecteddevicesplatform",
+                "peerdistrepub",
+                "publishers",
+                "speech",
+                "comms",
+                "upgrade",
+                "placeholdertilelogofolder",
+                "usoprivate",
+                "usoshared",
+                "whesvc",
+                "ssh",
+            ];
+            if WINDOWS_SYSTEM_DIRS.contains(&scanned_item_name.to_ascii_lowercase().as_str()) {
+                return;
+            }
         }
 
         let normalized_item_name = pear_format(scanned_item_name);
