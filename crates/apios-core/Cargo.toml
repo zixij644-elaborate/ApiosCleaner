@@ -1,0 +1,17 @@
+[package]
+name = "apios-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pearcleaner 核心引擎：应用相关文件扫描/匹配/回收站逻辑（Rust 重写）"
+
+[dependencies]
+walkdir = "2"
+rayon = "1"
+plist = "1"
+regex = "1"
+chrono = "0.4"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

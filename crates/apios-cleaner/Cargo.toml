@@ -1,0 +1,10 @@
+[package]
+name = "apios-cleaner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pearcleaner 重写版 CLI"
+
+[dependencies]
+apios-core = { path = "../apios-core" }
+clap = { version = "4", features = ["derive"] }

@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["crates/apios-core", "crates/apios-cleaner"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[profile.release]
+lto = true
