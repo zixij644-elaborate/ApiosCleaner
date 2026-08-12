@@ -37,6 +37,7 @@ struct SHFILEOPSTRUCTW {
     lpsz_progress_title: *const u16,
 }
 
+#[link(name = "shell32")]
 extern "system" {
     /// 返回 0 = 成功（BOOL 语义）；失败非零
     fn SHFileOperationW(lp_file_op: *mut SHFILEOPSTRUCTW) -> i32;

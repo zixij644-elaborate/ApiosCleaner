@@ -19,6 +19,7 @@ const REG_EXPAND_SZ: u32 = 2;
 
 const UNINSTALL_SUBKEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
 
+#[link(name = "advapi32")]
 extern "system" {
     // 写入 API 仅测试用（HKCU 临时键集成测试），生产只读
     #[cfg(test)]
