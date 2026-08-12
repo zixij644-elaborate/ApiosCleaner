@@ -9,8 +9,8 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    AppMetadata, DevEnvPaths, PackageManager, PackageManagers, PluginPaths, ProcessControl,
-    SpotlightIndex, SystemPaths, Trash,
+    AppDiscovery, AppMetadata, DevEnvPaths, PackageManager, PackageManagers, PluginPaths,
+    ProcessControl, SpotlightIndex, SystemPaths, Trash,
 };
 use crate::dev_env::DevEnv;
 use crate::model::{AppInfo, Sensitivity};
@@ -221,6 +221,14 @@ impl DevEnvPaths for FallbackAdapter {
 impl PluginPaths for FallbackAdapter {
     fn plugin_categories(&self) -> Vec<PluginCategory> {
         vec![] // 其他平台暂无 macOS 式插件目录体系，返回空
+    }
+}
+
+impl AppDiscovery for FallbackAdapter {
+    /// 委托 scan.rs 的 .app 目录 walk（Linux XDG 目录，通常为空；
+    /// desktop 文件解析属平台专业适配 TODO）
+    fn discover_installed_apps(&self) -> Vec<AppInfo> {
+        crate::scan::get_sorted_apps(&crate::scan::default_app_folders(&self.home))
     }
 }
 

@@ -125,6 +125,8 @@ pub mod lipo;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
+mod win_registry;
+#[cfg(target_os = "windows")]
 mod windows;
 
 /// 当前平台的适配器类型（cfg 编译期选择）

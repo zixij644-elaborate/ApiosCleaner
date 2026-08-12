@@ -24,6 +24,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
+#[cfg(not(target_os = "windows"))]
 use apios_core::app_info::get_app_info;
 use apios_core::dev_env::{dedup_nested, dir_size, env_sizes, expand_globs, expand_home, find_env};
 use apios_core::locations::Locations;
@@ -33,10 +34,14 @@ use apios_core::pkg::{detect_kind, PkgKind};
 #[cfg(target_os = "macos")]
 use apios_core::platform::lipo::{self, cpu_name, current_cputype, select_runnable_slice, FatFile};
 use apios_core::platform::{
-    PackageManager, PackageManagers, PluginPaths, ProcessControl, SystemPaths,
+    AppDiscovery, PackageManager, PackageManagers, PluginPaths, ProcessControl, SystemPaths,
 };
 use apios_core::plugin::{group_by_category, scan_plugins, PluginCategory};
-use apios_core::scan::{default_app_folders, get_sorted_apps};
+use apios_core::scan::default_app_folders;
+#[cfg(target_os = "windows")]
+use apios_core::scan::find_app_by_path;
+#[cfg(target_os = "macos")]
+use apios_core::scan::get_sorted_apps;
 use apios_core::search::AppPathFinder;
 use apios_core::trash::{delete_files, is_writable};
 use clap::{Parser, Subcommand};
@@ -170,28 +175,42 @@ fn arg_is_path(arg: &str) -> bool {
     arg.contains('/') || arg.contains('\\') || drive || arg.to_ascii_lowercase().ends_with(".app")
 }
 
-/// 在默认应用目录中按名称查找 <name>.app（先精确匹配，再大小写不敏感）
+/// 按名称查找应用 → 路径。
+/// macOS/Linux：在默认应用目录中查找 <name>.app（先精确匹配，再大小写不敏感）；
+/// Windows：无 .app 概念 —— 从发现结果（注册表 DisplayName / 开始菜单名）匹配。
 fn find_app_by_name(name: &str, folders: &[String]) -> Option<PathBuf> {
-    let exact = format!("{name}.app");
-    for folder in folders {
-        let candidate = Path::new(folder).join(&exact);
-        if candidate.exists() {
-            return Some(candidate);
-        }
+    #[cfg(windows)]
+    {
+        let _ = folders;
+        let apps = apios_core::platform::adapter().discover_installed_apps();
+        let lower = name.to_lowercase();
+        apps.into_iter()
+            .find(|a| a.app_name.to_lowercase() == lower)
+            .map(|a| a.path)
     }
-    // 大小写不敏感兜底（用户输入 "edge" 命中 "Microsoft Edge.app"）
-    let lower = exact.to_lowercase();
-    for folder in folders {
-        if let Ok(entries) = std::fs::read_dir(folder) {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name().to_string_lossy().to_lowercase();
-                if file_name == lower {
-                    return Some(entry.path());
+    #[cfg(not(windows))]
+    {
+        let exact = format!("{name}.app");
+        for folder in folders {
+            let candidate = Path::new(folder).join(&exact);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        // 大小写不敏感兜底（用户输入 "edge" 命中 "Microsoft Edge.app"）
+        let lower = exact.to_lowercase();
+        for folder in folders {
+            if let Ok(entries) = std::fs::read_dir(folder) {
+                for entry in entries.flatten() {
+                    let file_name = entry.file_name().to_string_lossy().to_lowercase();
+                    if file_name == lower {
+                        return Some(entry.path());
+                    }
                 }
             }
         }
+        None
     }
-    None
 }
 
 /// 解析 <app> 参数 → 应用 bundle 路径；失败时打印用法并退出 1
@@ -232,15 +251,42 @@ fn resolve_app_or_exit(arg: &str) -> PathBuf {
 }
 
 /// 获取 AppInfo，失败时打印错误并退出 1
+///
+/// Windows：无 Info.plist —— 从发现结果（注册表卸载项/开始菜单）按路径匹配；
+/// 未注册的应用（便携版）按目录名构造最小 AppInfo（bundle 空，降级匹配生效）。
 fn get_app_info_or_exit(path: &Path) -> AppInfo {
-    match get_app_info(path) {
-        Some(app) => app,
-        None => {
-            eprintln!(
-                "apios: unable to fetch app info at path: {}",
-                path.display()
-            );
-            exit(1);
+    #[cfg(windows)]
+    {
+        let apps = apios_core::platform::adapter().discover_installed_apps();
+        if let Some(app) = find_app_by_path(path, &apps) {
+            return app;
+        }
+        let app_name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+        return AppInfo {
+            path: path.to_path_buf(),
+            bundle_identifier: String::new(),
+            app_name,
+            entitlements: Vec::new(),
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+    }
+    #[cfg(not(windows))]
+    {
+        match get_app_info(path) {
+            Some(app) => app,
+            None => {
+                eprintln!(
+                    "apios: unable to fetch app info at path: {}",
+                    path.display()
+                );
+                exit(1);
+            }
         }
     }
 }
@@ -1006,9 +1052,9 @@ fn fmt_size(bytes: u64) -> String {
 }
 
 fn find_orphans() -> Vec<PathBuf> {
-    let home = apios_core::platform::adapter().home();
     let locations = Locations::new();
-    let apps = get_sorted_apps(&default_app_folders(&home));
+    // 平台化发现：macOS/Linux 内部即旧 walk（行为等价），Windows 走注册表+开始菜单
+    let apps = apios_core::platform::adapter().discover_installed_apps();
     let mut searcher = ReversePathsSearcher::new(locations, apps);
     searcher.reverse_paths_search_cli()
 }

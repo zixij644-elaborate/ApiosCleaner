@@ -43,6 +43,19 @@ pub fn get_sorted_apps(paths: &[String]) -> Vec<AppInfo> {
         .collect()
 }
 
+/// 在发现的应用列表中按路径查找（Windows 用：无 Info.plist，AppInfo 来自
+/// 发现结果）。路径大小写不敏感，同时匹配 exe（DisplayIcon）与安装目录
+/// （InstallLocation）两种形态 —— 任一为对方的路径前缀即命中。
+pub fn find_app_by_path(path: &Path, apps: &[AppInfo]) -> Option<AppInfo> {
+    let target = path.to_string_lossy().to_lowercase();
+    apps.iter()
+        .find(|a| {
+            let p = a.path.to_string_lossy().to_lowercase();
+            p == target || target.starts_with(&p) || p.starts_with(&target)
+        })
+        .cloned()
+}
+
 /// 在单个文件夹（深度 1）中查找 *.app 目录并解析
 fn walk_apps(folder: &Path) -> Vec<AppInfo> {
     let mut result = Vec::new();

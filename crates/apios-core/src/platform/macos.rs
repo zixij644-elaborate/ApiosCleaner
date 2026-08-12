@@ -9,7 +9,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::{
-    AppMetadata, DevEnvPaths, PluginPaths, ProcessControl, SpotlightIndex, SystemPaths, Trash,
+    AppDiscovery, AppMetadata, DevEnvPaths, PluginPaths, ProcessControl, SpotlightIndex,
+    SystemPaths, Trash,
 };
 use crate::dev_env::DevEnv;
 use crate::format::pear_format;
@@ -721,6 +722,13 @@ fn plugin_categories_table(home: &str) -> Vec<PluginCategory> {
 impl PluginPaths for MacOsAdapter {
     fn plugin_categories(&self) -> Vec<PluginCategory> {
         plugin_categories_table(&self.home)
+    }
+}
+
+impl AppDiscovery for MacOsAdapter {
+    /// 委托 scan.rs 的 .app 目录 walk（行为与旧 get_sorted_apps 调用点完全一致）
+    fn discover_installed_apps(&self) -> Vec<AppInfo> {
+        crate::scan::get_sorted_apps(&crate::scan::default_app_folders(&self.home))
     }
 }
 

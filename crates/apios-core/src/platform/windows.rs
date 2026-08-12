@@ -80,7 +80,10 @@ impl SystemPaths for WindowsAdapter {
             format!("{}\\Desktop", self.home),
             self.appdata_roaming.clone(),
             self.appdata_local.clone(),
-            format!("{}\\Microsoft\\Windows\\Start Menu\\Programs", self.appdata_roaming),
+            format!(
+                "{}\\Microsoft\\Windows\\Start Menu\\Programs",
+                self.appdata_roaming
+            ),
             format!(
                 "{}\\Microsoft\\Windows\\Start Menu\\Programs",
                 self.programdata
@@ -178,8 +181,105 @@ impl PackageManagers for WindowsAdapter {
 }
 
 impl AppDiscovery for WindowsAdapter {
-    /// 注册表卸载项 + 开始菜单（M3 落地）；当前返回空
+    /// 注册表卸载项（主数据源）+ 开始菜单 .lnk（补充便携应用）
+    ///
+    /// AppInfo 语义：bundle_identifier 恒空 → identifiers 的 use_bundle_identifier
+    /// 门控自动关闭 bundle-id 匹配族，app_name/path needle 继续生效（无空值崩溃）。
+    /// path 优先级：DisplayIcon 文件（去 ",0" 后缀）> InstallLocation 目录；
+    /// 两者都不存在（应用已卸载，仅剩残留）→ 不进入已安装列表 —— 残留由
+    /// orphan 反向搜索判定为孤儿，这正是清理目标。
     fn discover_installed_apps(&self) -> Vec<AppInfo> {
-        Vec::new()
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut out: Vec<AppInfo> = Vec::new();
+
+        // 1) 注册表卸载项
+        for e in super::win_registry::all_uninstall_entries() {
+            let icon = e
+                .display_icon
+                .as_deref()
+                .and_then(|s| s.split(',').next()) // "C:\...\foo.exe,0" → 文件路径
+                .map(PathBuf::from)
+                .filter(|p| p.is_file());
+            let path = icon.or_else(|| {
+                e.install_location
+                    .as_ref()
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_dir())
+            });
+            let Some(path) = path else { continue };
+            let key = path.to_string_lossy().to_lowercase();
+            if seen.insert(key) {
+                out.push(minimal_app_info(path, e.display_name));
+            }
+        }
+
+        // 2) 开始菜单 .lnk（注册表覆盖不到的便携应用；.lnk 本身是真实文件可匹配）
+        for root in [self.start_menu_user(), self.start_menu_common()] {
+            for lnk in walk_lnk(Path::new(&root)) {
+                let name = lnk
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    continue;
+                }
+                let key = lnk.to_string_lossy().to_lowercase();
+                if seen.insert(key) {
+                    out.push(minimal_app_info(lnk, name));
+                }
+            }
+        }
+        out
     }
+}
+
+impl WindowsAdapter {
+    fn start_menu_user(&self) -> String {
+        format!(
+            "{}\\Microsoft\\Windows\\Start Menu\\Programs",
+            self.appdata_roaming
+        )
+    }
+
+    fn start_menu_common(&self) -> String {
+        format!(
+            "{}\\Microsoft\\Windows\\Start Menu\\Programs",
+            self.programdata
+        )
+    }
+}
+
+/// 最小 AppInfo（Windows 无 bundle id / codesign 概念，字段置空）
+fn minimal_app_info(path: PathBuf, app_name: String) -> AppInfo {
+    AppInfo {
+        path,
+        bundle_identifier: String::new(),
+        app_name,
+        entitlements: Vec::new(),
+        team_identifier: None,
+        web_app: false,
+        steam: false,
+        wrapped: false,
+    }
+}
+
+/// 递归找 *.lnk（WalkDir；目录不存在 → 空）
+fn walk_lnk(dir: &Path) -> Vec<PathBuf> {
+    use walkdir::WalkDir;
+    let mut out = Vec::new();
+    for entry in WalkDir::new(dir)
+        .max_depth(6)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let is_lnk = entry
+            .path()
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase() == "lnk")
+            .unwrap_or(false);
+        if entry.file_type().is_file() && is_lnk {
+            out.push(entry.into_path());
+        }
+    }
+    out
 }
