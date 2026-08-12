@@ -117,6 +117,17 @@ fn expand_env(s: &str) -> String {
     narrow(&buf)
 }
 
+/// 剥掉路径类值首尾的引号对（`"C:\...\x.exe"`）。安装器习惯给带空格路径
+/// 加引号（DisplayIcon/InstallLocation/UninstallString 常见），不剥的话
+/// is_file()/is_dir() 用带引号路径检查全 false，条目被误判"已卸载"丢弃。
+fn strip_quotes(s: &str) -> String {
+    s.trim()
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or_else(|| s.trim())
+        .to_string()
+}
+
 /// 纯解析：值映射（名字 → (类型, 原始字节)）→ 卸载项。
 /// `%VAR%` 展开只对 REG_EXPAND_SZ 生效；REG_SZ 原样。
 pub fn entry_from_values(
@@ -139,10 +150,10 @@ pub fn entry_from_values(
     let display_name = get("DisplayName").filter(|n| !n.is_empty())?;
     Some(UninstallEntry {
         display_name,
-        install_location: get("InstallLocation"),
-        display_icon: get("DisplayIcon"),
+        install_location: get("InstallLocation").map(|s| strip_quotes(&s)),
+        display_icon: get("DisplayIcon").map(|s| strip_quotes(&s)),
         publisher: get("Publisher"),
-        uninstall_string: get("UninstallString"),
+        uninstall_string: get("UninstallString").map(|s| strip_quotes(&s)),
     })
 }
 
@@ -292,6 +303,39 @@ mod tests {
         );
         assert_eq!(entry.publisher.as_deref(), Some("Microsoft Corporation"));
         assert!(entry.display_icon.is_none());
+    }
+
+    #[test]
+    fn test_entry_strips_quotes_from_path_values() {
+        // 安装器常给带空格路径加引号（微信注册表实测形态）：
+        // 不剥引号 → is_file/is_dir 检查全 false → 条目被丢弃
+        let mut values = std::collections::HashMap::new();
+        values.insert("DisplayName".into(), sz("微信"));
+        values.insert(
+            "DisplayIcon".into(),
+            sz(r#""C:\Program Files\Tencent\Weixin\Weixin.exe""#),
+        );
+        values.insert(
+            "InstallLocation".into(),
+            sz(r#""C:\Program Files\Tencent\Weixin""#),
+        );
+        values.insert(
+            "UninstallString".into(),
+            sz(r#""C:\Program Files\Tencent\Weixin\Uninstall.exe""#),
+        );
+        let entry = entry_from_values(&values).unwrap();
+        assert_eq!(
+            entry.display_icon.as_deref(),
+            Some(r"C:\Program Files\Tencent\Weixin\Weixin.exe")
+        );
+        assert_eq!(
+            entry.install_location.as_deref(),
+            Some(r"C:\Program Files\Tencent\Weixin")
+        );
+        assert_eq!(
+            entry.uninstall_string.as_deref(),
+            Some(r"C:\Program Files\Tencent\Weixin\Uninstall.exe")
+        );
     }
 
     #[test]
