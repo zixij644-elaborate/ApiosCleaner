@@ -206,6 +206,18 @@ impl ReversePathsSearcher {
             return;
         }
 
+        // Windows 内置兼容 junction（AppData\Local\Application Data、
+        // ProgramData\Documents 等，系统 ReparsePoint）—— 每台系统都有、
+        // 永不被应用引用，列为孤儿是 100% 误报（clean-orphan 会诱删）。
+        // 真实应用残留是普通文件/目录，junction 只有系统兼容机制在用。
+        #[cfg(target_os = "windows")]
+        if std::fs::symlink_metadata(path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return;
+        }
+
         let normalized_item_name = pear_format(scanned_item_name);
         if is_uuid_formatted(&normalized_item_name) {
             return;
