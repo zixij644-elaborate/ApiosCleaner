@@ -139,9 +139,25 @@ impl ReversePathsSearcher {
                     .parent()
                     .and_then(|d| d.file_name())
                     .map(|n| pear_format(&n.to_string_lossy()));
-                if let Some(d) =
-                    dir.filter(|d| d != "programs" && d != "programsx86" && d != "startmenu")
-                {
+                if let Some(d) = dir.filter(|d| {
+                    // 结构/系统目录：不是供应商标识。Program Files 根直放的
+                    // exe、Common Files 共享目录、Windows 系统目录 —— 作为
+                    // needle 会成全路径宽匹配（"programfiles" 命中所有
+                    // Program Files 路径，fix A 直接失效）
+                    !matches!(
+                        d.as_str(),
+                        "programs"
+                            | "programsx86"
+                            | "startmenu"
+                            | "applications"
+                            | "programfiles"
+                            | "programfilesx86"
+                            | "windows"
+                            | "system32"
+                            | "syswow64"
+                            | "commonfiles"
+                    )
+                }) {
                     if path_needle_qualifies(&d) {
                         needles.push(d);
                     }
