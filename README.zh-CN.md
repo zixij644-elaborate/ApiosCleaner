@@ -155,7 +155,7 @@ apios pkg winget uninstall 7-Zip
 ## 文档
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 可移植核心 + 适配器模式、模块图和
-  安全模型
+  安全模型（[中文版](docs/zh-CN/ARCHITECTURE.zh-CN.md)）
 - [CHANGELOG.md](CHANGELOG.md) — 发布历史
 
 ## 许可证
