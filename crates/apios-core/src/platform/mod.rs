@@ -49,7 +49,18 @@ pub trait AppMetadata {
 
 /// 回收站语义（macOS ~/.Trash / Linux XDG trash / Windows 回收站）
 pub trait Trash {
+    /// POSIX 归档目录（Windows 回收站无目录模型，恒不用）
     fn trash_dir(&self) -> PathBuf;
+
+    /// 动作级：把文件移入回收站。默认实现 = POSIX 归档式（move_to_trash_dir，
+    /// 归档目录/重名 -N/跨卷 copy 回退）；Windows 覆写走 SHFileOperationW。
+    fn move_to_trash(
+        &self,
+        urls: &[PathBuf],
+        bundle_name: Option<&str>,
+    ) -> crate::trash::DeleteResult {
+        crate::trash::move_to_trash_dir(urls, bundle_name, self.trash_dir())
+    }
 }
 
 /// 卸载前终止运行中的应用（原版 GUI 的 killApp；每平台机制不同：
@@ -126,6 +137,8 @@ pub mod lipo;
 mod macos;
 #[cfg(target_os = "windows")]
 mod win_registry;
+#[cfg(target_os = "windows")]
+mod win_trash;
 #[cfg(target_os = "windows")]
 mod windows;
 

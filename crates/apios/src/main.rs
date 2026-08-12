@@ -46,6 +46,33 @@ use apios_core::search::AppPathFinder;
 use apios_core::trash::{delete_files, is_writable};
 use clap::{Parser, Subcommand};
 
+/// 回收站文案（Windows 无 Trash 归档目录概念，系统回收站叫 Recycle Bin）
+fn trash_label() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Recycle Bin"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "Trash"
+    }
+}
+
+/// 删除完成消息（Windows 回收站内路径不可知，不打印归档目录）
+fn deleted_message(count: usize, bundle_folder: &std::path::Path) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        format!("Deleted {count} files to Recycle Bin")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        format!(
+            "Deleted {count} files to Trash ({})",
+            bundle_folder.display()
+        )
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "apios",
@@ -365,7 +392,11 @@ fn cmd_uninstall(cli: &Cli, arg: &str) {
     check_protected(&found, &format!("apios uninstall {}", arg));
 
     println!("{} ({})", app.app_name, app.bundle_identifier);
-    println!("{} related files will be moved to Trash:", found.len());
+    println!(
+        "{} related files will be moved to {}:",
+        found.len(),
+        trash_label()
+    );
     for p in &found {
         println!("  {}", p.display());
     }
@@ -383,9 +414,8 @@ fn cmd_uninstall(cli: &Cli, arg: &str) {
     let result = delete_files(&found, Some(&app.app_name));
     if result.success {
         println!(
-            "\nDeleted {} files to Trash ({})",
-            result.moved.len(),
-            result.bundle_folder.display()
+            "\n{}",
+            deleted_message(result.moved.len(), &result.bundle_folder)
         );
         if !result.failed.is_empty() {
             eprintln!(
@@ -476,9 +506,8 @@ fn cmd_dev_clean(cli: &Cli, env: Option<&str>) {
     let result = delete_files(&contents, Some(&format!("Development - {}", env.name)));
     if result.success {
         println!(
-            "\nDeleted {} files to Trash ({})",
-            result.moved.len(),
-            result.bundle_folder.display()
+            "\n{}",
+            deleted_message(result.moved.len(), &result.bundle_folder)
         );
         if !result.failed.is_empty() {
             eprintln!(
@@ -750,8 +779,9 @@ fn cmd_plugins(cli: &Cli, category: Option<&str>, clean: Option<&str>) {
         if !confirm(
             cli,
             &format!(
-                "\nDelete {count} plugin(s) — {}? (moved to Trash)",
-                fmt_size(total)
+                "\nDelete {count} plugin(s) — {}? (moved to {})",
+                fmt_size(total),
+                trash_label()
             ),
         ) {
             println!("Aborted — nothing was deleted.");
@@ -765,9 +795,8 @@ fn cmd_plugins(cli: &Cli, category: Option<&str>, clean: Option<&str>) {
         let result = delete_files(&paths, Some(&format!("Plugins ({count} items)")));
         if result.success {
             println!(
-                "\nDeleted {} files to Trash ({})",
-                result.moved.len(),
-                result.bundle_folder.display()
+                "\n{}",
+                deleted_message(result.moved.len(), &result.bundle_folder)
             );
         }
         if !result.failed.is_empty() {
@@ -795,7 +824,10 @@ fn cmd_plugins(cli: &Cli, category: Option<&str>, clean: Option<&str>) {
         grouped.len(),
         fmt_size(total)
     );
-    println!("Run `apios plugins --clean [category]` to delete them (moved to Trash).");
+    println!(
+        "Run `apios plugins --clean [category]` to delete them (moved to {}).",
+        trash_label()
+    );
 }
 
 // ---------- Lipo（fat 瘦身） ----------
@@ -1079,7 +1111,11 @@ fn cmd_clean_orphan(cli: &Cli) {
 
     check_protected(&found, "apios clean-orphan");
 
-    println!("{} orphaned files will be moved to Trash:", found.len());
+    println!(
+        "{} orphaned files will be moved to {}:",
+        found.len(),
+        trash_label()
+    );
     if !confirm(cli, &format!("Delete {} files? ", found.len())) {
         println!("Aborted — nothing was deleted.");
         return;
@@ -1088,9 +1124,8 @@ fn cmd_clean_orphan(cli: &Cli) {
     let result = delete_files(&found, Some("Orphaned"));
     if result.success {
         println!(
-            "\nDeleted {} files to Trash ({})",
-            result.moved.len(),
-            result.bundle_folder.display()
+            "\n{}",
+            deleted_message(result.moved.len(), &result.bundle_folder)
         );
         if !result.failed.is_empty() {
             eprintln!(

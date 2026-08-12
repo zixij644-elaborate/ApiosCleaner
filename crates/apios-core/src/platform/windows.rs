@@ -13,6 +13,7 @@
 //! - 回收站 = 系统 API（逐盘符，无目录模型），delete_files 的 POSIX 归档语义不适用
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use super::{
     AppDiscovery, AppMetadata, DevEnvPaths, PackageManagers, PluginPaths, ProcessControl,
@@ -153,17 +154,93 @@ impl PluginPaths for WindowsAdapter {
 }
 
 impl Trash for WindowsAdapter {
-    /// Windows 回收站无目录模型；此值为占位（M4 起删除走 move_to_trash 的 SHFileOperationW）
+    /// Windows 回收站无目录模型；此值为占位（删除走 move_to_trash → SHFileOperationW）
     fn trash_dir(&self) -> PathBuf {
         PathBuf::from(self.temp_dir.clone()).join("apios-trash")
+    }
+
+    /// SHFileOperationW（FO_DELETE + FOF_ALLOWUNDO → 系统回收站，可在回收站恢复）。
+    /// 无归档目录：moved 的 trash_path 置空（回收站内路径不可知）、bundle_folder 空。
+    fn move_to_trash(
+        &self,
+        urls: &[PathBuf],
+        _bundle_name: Option<&str>,
+    ) -> crate::trash::DeleteResult {
+        let moved = super::win_trash::recycle_batch(urls);
+        let moved_set: std::collections::HashSet<PathBuf> = moved.iter().cloned().collect();
+        let failed: Vec<PathBuf> = urls
+            .iter()
+            .filter(|p| !moved_set.contains(*p))
+            .cloned()
+            .collect();
+        let moved: Vec<crate::trash::FilePair> = moved
+            .into_iter()
+            .map(|p| crate::trash::FilePair {
+                trash_path: PathBuf::new(),
+                original_path: p,
+            })
+            .collect();
+        crate::trash::DeleteResult {
+            success: failed.is_empty() && !moved.is_empty(),
+            bundle_folder: PathBuf::new(),
+            moved,
+            blocked: Vec::new(),
+            failed,
+        }
     }
 }
 
 impl ProcessControl for WindowsAdapter {
-    /// taskkill 实现（M4 落地）；当前返回 0
-    fn kill_running_app(&self, _app: &AppInfo) -> u32 {
-        0
+    /// taskkill 移植（对齐 macOS kill_running_app 的"终止后复查"语义）：
+    /// tasklist 按镜像名计数 → 全部终止（/F 强制 /T 连带子进程）→ 复查差值。
+    /// 仅对 .exe 生效（.lnk 发现的便携应用无进程名可映射 → 0）。
+    fn kill_running_app(&self, app: &AppInfo) -> u32 {
+        let Some(name) = app
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|n| n.to_ascii_lowercase().ends_with(".exe"))
+        else {
+            return 0;
+        };
+        let running = tasklist_count(&name);
+        if running == 0 {
+            return 0;
+        }
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/IM", &name])
+            .output();
+        // 给进程退出留时间，降低随后的文件移动失败概率（对齐 macOS）
+        std::thread::sleep(Duration::from_millis(200));
+        let still = tasklist_count(&name);
+        running.saturating_sub(still)
     }
+}
+
+/// `tasklist /FI "IMAGENAME eq <name>"` 命中进程数（CSV 无表头，按行计数）
+fn tasklist_count(image_name: &str) -> u32 {
+    let Ok(out) = std::process::Command::new("tasklist")
+        .args([
+            "/FI",
+            &format!("IMAGENAME eq {image_name}"),
+            "/FO",
+            "CSV",
+            "/NH",
+        ])
+        .output()
+    else {
+        return 0;
+    };
+    if !out.status.success() {
+        return 0;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .filter(|l| {
+            l.to_ascii_lowercase()
+                .contains(&image_name.to_ascii_lowercase())
+        })
+        .count() as u32
 }
 
 impl DevEnvPaths for WindowsAdapter {

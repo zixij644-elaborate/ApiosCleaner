@@ -147,46 +147,40 @@ pub fn validate_path(path: &str) -> bool {
     }
 }
 
-/// 删除文件到回收站归档目录（CLI 版 deleteFiles，UndoManager.swift:62-174）
+/// POSIX 归档式回收站移动（共享核心函数，Trash::move_to_trash 的默认实现）。
+/// 在 `trash_dir` 下创建 `<名>_<时间戳>` 归档目录并逐文件移入
+/// （重名 -N 后缀 / 跨卷 copy 回退）。Windows 回收站无目录模型，
+/// 由 WindowsAdapter 覆写走 SHFileOperationW，本函数仅 POSIX 语义。
 ///
 /// - `urls`: 待删除路径（顺序无要求，原版为数组）
 /// - `bundle_name`: 归档目录名前缀（原版取 AppState.appInfo.appName，CLI 传应用名）
-pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult {
-    // 单次遍历分区（原版对每个 URL 校验两次）
-    let (valid, blocked): (Vec<PathBuf>, Vec<PathBuf>) = {
-        let (v, b): (Vec<&PathBuf>, Vec<&PathBuf>) = urls
-            .iter()
-            .partition(|u| validate_path(&u.to_string_lossy()));
-        (
-            v.into_iter().cloned().collect(),
-            b.into_iter().cloned().collect(),
-        )
-    };
-
+pub fn move_to_trash_dir(
+    urls: &[PathBuf],
+    bundle_name: Option<&str>,
+    trash_dir: PathBuf,
+) -> DeleteResult {
     let mut result = DeleteResult {
         success: false,
         bundle_folder: PathBuf::new(),
         moved: Vec::new(),
-        blocked,
+        blocked: Vec::new(),
         failed: Vec::new(),
     };
-    if valid.is_empty() {
+    if urls.is_empty() {
         return result;
     }
-
-    let trash = crate::platform::adapter().trash_dir();
 
     // 归档目录名（UndoManager.swift:85-104）。
     // 防御：应用名可能含 "/"（嵌套路径），替换为 "_" 避免破坏归档目录结构
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let folder_name = match bundle_name.filter(|n| !n.is_empty()) {
         Some(name) => name.replace(['/', ':', '\\', '<', '>', '"', '|', '?', '*'], "_"),
-        None => valid
+        None => urls
             .first()
             .and_then(|f| f.file_stem().map(|s| s.to_string_lossy().to_string()))
             .unwrap_or_else(|| "Mixed Files".to_string()),
     };
-    let bundle_folder = trash.join(format!("{folder_name}_{timestamp}"));
+    let bundle_folder = trash_dir.join(format!("{folder_name}_{timestamp}"));
 
     // 建目录 + 逐文件移动（重名后缀，UndoManager.swift:109-132）
     if std::fs::create_dir_all(&bundle_folder).is_err() {
@@ -194,7 +188,7 @@ pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult
     }
 
     let mut seen: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    for file in &valid {
+    for file in urls {
         let base_name = file
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -239,6 +233,27 @@ pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult
 
     result.success = result.failed.is_empty() && !result.moved.is_empty();
     result.bundle_folder = bundle_folder;
+    result
+}
+
+/// 删除文件到回收站（CLI 版 deleteFiles，UndoManager.swift:62-174）。
+///
+/// 安全校验分区（平台无关）→ 委托平台适配器的 Trash::move_to_trash
+/// （macOS/Linux 默认走 move_to_trash_dir 归档；Windows 走系统回收站 API）。
+pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult {
+    // 单次遍历分区（原版对每个 URL 校验两次）
+    let (valid, blocked): (Vec<PathBuf>, Vec<PathBuf>) = {
+        let (v, b): (Vec<&PathBuf>, Vec<&PathBuf>) = urls
+            .iter()
+            .partition(|u| validate_path(&u.to_string_lossy()));
+        (
+            v.into_iter().cloned().collect(),
+            b.into_iter().cloned().collect(),
+        )
+    };
+
+    let mut result = crate::platform::adapter().move_to_trash(&valid, bundle_name);
+    result.blocked = blocked;
     result
 }
 
@@ -345,6 +360,58 @@ mod tests {
         let home = crate::platform::adapter().home();
         assert!(!validate_path(&home)); // USERPROFILE 根拦截
         assert!(!validate_path(&format!("{home}\\AppData\\Roaming\\x"))); // 子路径放行
+    }
+
+    /// move_to_trash_dir（POSIX 归档核心函数）直接单测：
+    /// 归档目录命名/重名 -N 后缀/空列表短路
+    #[test]
+    fn test_move_to_trash_dir_archive_semantics() {
+        let tmp = TempDir::new().unwrap();
+        let t1 = tmp.path().join("t1");
+        let t2 = tmp.path().join("t2");
+        std::fs::create_dir_all(&t1).unwrap();
+        std::fs::create_dir_all(&t2).unwrap();
+        let f1 = t1.join("same.txt");
+        let f2 = t2.join("same.txt");
+        std::fs::write(&f1, b"1").unwrap();
+        std::fs::write(&f2, b"2").unwrap();
+
+        let trash = tmp.path().join("trash");
+        let result = move_to_trash_dir(&[f1.clone(), f2.clone()], Some("App"), trash.clone());
+        assert!(result.success);
+        assert_eq!(result.moved.len(), 2);
+        assert!(result.failed.is_empty());
+        assert!(!f1.exists() && !f2.exists());
+        assert!(result.bundle_folder.starts_with(&trash));
+        // 重名 → 归档内 second 变为 same.txt-1
+        let names: Vec<String> = result
+            .moved
+            .iter()
+            .map(|p| {
+                p.trash_path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert!(names.contains(&"same.txt".to_string()));
+        assert!(names.contains(&"same.txt-1".to_string()));
+
+        // 归档目录名前缀净化："/" → "_"
+        let r2 = move_to_trash_dir(&[f1], Some("Test/App"), trash.clone());
+        let folder = r2
+            .bundle_folder
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(folder.starts_with("Test_App_"), "归档名应净化: {folder}");
+
+        // 空列表 → 短路（success=false，不建目录）
+        let empty = move_to_trash_dir(&[], Some("App"), trash.clone());
+        assert!(!empty.success);
+        assert!(empty.moved.is_empty() && empty.failed.is_empty());
     }
 
     #[test]
