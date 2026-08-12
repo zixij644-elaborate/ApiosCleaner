@@ -46,8 +46,22 @@ core can ship as per-OS builds, each tuned for its platform.
 
 ## Install
 
+**Pre-built binary** (recommended) — download the latest release from
+[GitHub Releases](https://github.com/Zniece/ApiosCleaner/releases/latest),
+then unzip and add it to your PATH:
+
 ```sh
-# From source (macOS)
+unzip apios-v0.1.0-macos-universal.zip -d ~/bin
+# universal binary: Apple Silicon (arm64) and Intel (x86_64)
+```
+
+> ⚠️ macOS Gatekeeper: the binary is ad-hoc signed; the first run from a
+> downloaded zip may need right-click → **Open**, or
+> `xattr -d com.apple.quarantine ~/bin/apios`.
+
+Or build from source (macOS):
+
+```sh
 git clone git@github.com:Zniece/ApiosCleaner.git
 cd ApiosCleaner
 cargo build --release
