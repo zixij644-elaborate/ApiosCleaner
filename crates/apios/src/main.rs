@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 
 use apios_core::app_info::get_app_info;
+use apios_core::dev_env::{dedup_nested, dir_size, env_sizes, expand_globs, expand_home, find_env};
 use apios_core::locations::Locations;
 use apios_core::model::{AppInfo, Sensitivity};
 use apios_core::orphan::ReversePathsSearcher;
@@ -58,6 +59,11 @@ enum Command {
     Orphan,
     /// Delete all orphaned files (asks for confirmation)
     CleanOrphan,
+    /// List dev environment caches (read-only); with <env>, clean it
+    DevClean {
+        /// Environment name (case-insensitive), or "all" for everything
+        env: Option<String>,
+    },
 }
 
 fn main() {
@@ -67,6 +73,7 @@ fn main() {
         Command::Uninstall { ref app } => cmd_uninstall(&cli, app),
         Command::Orphan => cmd_orphan(&cli),
         Command::CleanOrphan => cmd_clean_orphan(&cli),
+        Command::DevClean { ref env } => cmd_dev_clean(&cli, env.as_deref()),
     }
 }
 
@@ -243,6 +250,98 @@ fn cmd_uninstall(cli: &Cli, arg: &str) {
     }
 }
 
+/// 目录顶层条目（忽略 read_dir 失败与单个条目错误）
+fn dir_contents(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten() // Result<ReadDir> → ReadDir（目录不可读则空）
+        .flatten() // Result<DirEntry> → DirEntry（条目错误则跳过）
+        .map(|e| e.path())
+        .collect()
+}
+
+fn cmd_dev_clean(cli: &Cli, env: Option<&str>) {
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    // 无参数：列出所有环境的占用（只读）
+    let Some(env_name) = env else {
+        let sizes = env_sizes();
+        let max_name = sizes
+            .iter()
+            .map(|(e, _)| e.name.chars().count())
+            .max()
+            .unwrap_or(0);
+        for (env, paths) in &sizes {
+            let total: u64 = paths.iter().map(|(_, s)| s).sum();
+            println!("{:width$}  {}", env.name, fmt_size(total), width = max_name);
+        }
+        println!(
+            "\n{} environments. Run `apios dev-clean <name>` to clean one (or `all`).",
+            sizes.len()
+        );
+        return;
+    };
+
+    let Some(env) = find_env(env_name) else {
+        eprintln!("apios: unknown environment \"{env_name}\". Run `apios dev-clean` to list all.");
+        exit(1);
+    };
+
+    // 目标目录（~ 展开 + 通配展开 + 存在性过滤 + 嵌套去重）
+    let mut dirs: Vec<PathBuf> = env
+        .paths
+        .iter()
+        .flat_map(|p| expand_globs(Path::new(&expand_home(p, &home))))
+        .filter(|p| p.is_dir())
+        .collect();
+    dedup_nested(&mut dirs);
+    // 清理语义 = 删目录内容（原版 deleteFolderContents），保留顶层目录
+    let contents: Vec<PathBuf> = dirs.iter().flat_map(|d| dir_contents(d)).collect();
+    if contents.is_empty() {
+        println!("{}: nothing to clean.", env.name);
+        return;
+    }
+
+    check_protected(&contents, &format!("apios dev-clean {env_name}"));
+
+    println!(
+        "{} — {} files in {} folder(s):",
+        env.name,
+        contents.len(),
+        dirs.len()
+    );
+    for d in &dirs {
+        println!("  {}  ({})", d.display(), fmt_size(dir_size(d)));
+    }
+    if !confirm(cli, &format!("Delete contents of {} folders? ", dirs.len())) {
+        println!("Aborted — nothing was deleted.");
+        return;
+    }
+
+    let result = delete_files(&contents, Some(&format!("Development - {}", env.name)));
+    if result.success {
+        println!(
+            "\nDeleted {} files to Trash ({})",
+            result.moved.len(),
+            result.bundle_folder.display()
+        );
+        if !result.failed.is_empty() {
+            eprintln!(
+                "Failed to delete {} files (in use or protected).",
+                result.failed.len()
+            );
+        }
+        exit(0);
+    } else {
+        eprintln!("\napios: failed to delete files.");
+        exit(1);
+    }
+}
+
+fn fmt_size(bytes: u64) -> String {
+    apios_core::dev_env::fmt_size(bytes)
+}
+
 fn find_orphans() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
     let locations = Locations::new();
@@ -317,5 +416,15 @@ mod tests {
         // "." 的解析入口就是 current_dir（不存在时返回 None）
         let cwd = std::env::current_dir().unwrap();
         assert!(cwd.exists());
+    }
+
+    #[test]
+    fn test_dir_contents_lists_top_level() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("a"), b"x").unwrap();
+        std::fs::create_dir(tmp.path().join("sub")).unwrap();
+        std::fs::write(tmp.path().join("sub/b"), b"x").unwrap();
+        let contents = dir_contents(tmp.path());
+        assert_eq!(contents.len(), 2); // 仅顶层条目，不递归
     }
 }

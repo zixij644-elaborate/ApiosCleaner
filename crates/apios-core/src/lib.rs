@@ -5,6 +5,7 @@
 
 pub mod app_info;
 pub mod conditions;
+pub mod dev_env;
 pub mod format;
 pub mod identifiers;
 pub mod locations;

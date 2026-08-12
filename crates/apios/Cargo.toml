@@ -8,3 +8,6 @@ description = "ApiosCleaner 命令行工具（命令参数式）"
 [dependencies]
 apios-core = { path = "../apios-core" }
 clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"

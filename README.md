@@ -61,6 +61,12 @@ commands ask for confirmation (`y/N`, default no); pass `-y` to skip it
 
 # Delete all orphaned files
 ./target/release/apios clean-orphan
+
+# List dev environment cache sizes (read-only)
+./target/release/apios dev-clean
+
+# Clean one dev environment (e.g. Cargo, Gradle, Xcode), or "all"
+./target/release/apios dev-clean cargo
 ```
 
 ## License
