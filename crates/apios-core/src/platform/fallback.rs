@@ -8,7 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{AppMetadata, ProcessControl, SpotlightIndex, SystemPaths, Trash};
+use super::{AppMetadata, DevEnvPaths, ProcessControl, SpotlightIndex, SystemPaths, Trash};
+use crate::dev_env::DevEnv;
 use crate::model::{AppInfo, Sensitivity};
 
 /// 非 macOS 平台的基础适配器（当前按 Linux XDG 约定提供默认值）
@@ -112,5 +113,136 @@ impl ProcessControl for FallbackAdapter {
     /// 尚未实现：Linux pkill（注意 15 字符进程名截断）、Windows taskkill —— 平台适配 TODO
     fn kill_running_app(&self, _app: &AppInfo) -> u32 {
         0
+    }
+}
+
+/// 开发环境路径表（Linux XDG 布局子集，收紧原则同 macOS：只列可再生缓存）。
+/// TODO（Linux 适配器阶段细化）：Android Studio（~/.android、~/.cache/Google）、
+/// VS Code 完整缓存集（~/.config/Code/*）、flatpak/snap 变体、Windows（%LOCALAPPDATA% 等）。
+fn dev_envs_table() -> Vec<DevEnv> {
+    let p = |s: &str| s.to_string();
+    vec![
+        DevEnv {
+            name: "Cargo".into(),
+            paths: vec![p("~/.cargo/git/"), p("~/.cargo/registry/")],
+        },
+        DevEnv {
+            name: "Conda".into(),
+            paths: vec![p("~/.conda/pkgs/")], // 包下载缓存（可再生）；环境本体不列
+        },
+        DevEnv {
+            name: "Deno".into(),
+            paths: vec![p("~/.cache/deno")],
+        },
+        DevEnv {
+            name: "Go Modules".into(),
+            paths: vec![p("~/go/pkg/mod/")],
+        },
+        DevEnv {
+            name: "Gradle".into(),
+            paths: vec![p("~/.gradle/caches/"), p("~/.gradle/wrapper/")],
+        },
+        DevEnv {
+            name: "Haskell Stack".into(),
+            paths: vec![p("~/.stack/snapshots/")],
+        },
+        DevEnv {
+            name: "Maven".into(),
+            paths: vec![p("~/.m2/repository/")],
+        },
+        DevEnv {
+            name: "Nix".into(),
+            paths: vec![p("~/.cache/nix/")],
+        },
+        DevEnv {
+            name: "Npm".into(),
+            paths: vec![
+                p("~/.npm/"),
+                p("~/.cache/pnpm/store"),
+                p("~/.bun/install/cache"),
+            ],
+        },
+        DevEnv {
+            name: "Pip".into(),
+            paths: vec![p("~/.cache/pip/")],
+        },
+        DevEnv {
+            name: "Poetry".into(),
+            paths: vec![p("~/.cache/pypoetry/")],
+        },
+        DevEnv {
+            name: "Pub".into(),
+            paths: vec![p("~/.pub-cache/"), p("~/.cache/flutter_engine/")],
+        },
+        DevEnv {
+            name: "Pyenv".into(),
+            paths: vec![p("~/.pyenv/cache/")],
+        },
+        DevEnv {
+            name: "Swift".into(),
+            paths: vec![p("~/.swiftpm/")],
+        },
+        DevEnv {
+            name: "Uv".into(),
+            paths: vec![p("~/.cache/uv/")],
+        },
+        DevEnv {
+            name: "VS Code".into(),
+            paths: vec![
+                p("~/.config/Code/Cache"),
+                p("~/.config/Code/CachedData"),
+                p("~/.config/Code/CachedExtensionVSIXs"),
+                p("~/.config/Code/Code Cache"),
+            ],
+        },
+        DevEnv {
+            name: "Yarn".into(),
+            paths: vec![p("~/.cache/yarn/"), p("~/.yarn-cache/")],
+        },
+        DevEnv {
+            name: "Zed".into(),
+            paths: vec![p("~/.cache/zed/"), p("~/.local/share/zed/node/cache/")],
+        },
+    ]
+}
+
+impl DevEnvPaths for FallbackAdapter {
+    fn dev_envs(&self) -> Vec<DevEnv> {
+        dev_envs_table()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dev_envs_cross_platform_paths() {
+        // Linux 子集不得含 macOS 布局（~/Library），且不得列工具本体
+        let envs = dev_envs_table();
+        let all: Vec<&str> = envs
+            .iter()
+            .flat_map(|e| e.paths.iter().map(|p| p.as_str()))
+            .collect();
+        assert!(
+            all.iter().all(|p| !p.contains("Library/")),
+            "Linux 路径表不应含 macOS ~/Library 布局: {:?}",
+            all.iter().find(|p| p.contains("Library/"))
+        );
+        // 完全不出现的路径（前缀禁止）
+        for forbidden in ["anaconda3/", "miniconda3/", "~/.gem/"] {
+            assert!(
+                !all.iter().any(|p| p.starts_with(forbidden)),
+                "路径表不应包含路径 {forbidden}"
+            );
+        }
+        // 工具本体根条目不得出现（其下缓存子路径合法）
+        for root in ["~/.cargo/", "~/.nvm/", "~/.pyenv/"] {
+            assert!(
+                !all.iter().any(|p| p == &root),
+                "路径表不应包含工具本体根目录 {root}"
+            );
+        }
+        assert!(envs.iter().any(|e| e.name == "Conda")); // Linux 有安全缓存条目（pkgs）
     }
 }

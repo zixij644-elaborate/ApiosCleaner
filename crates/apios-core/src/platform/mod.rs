@@ -59,6 +59,13 @@ pub trait ProcessControl {
     fn kill_running_app(&self, app: &AppInfo) -> u32;
 }
 
+/// 开发环境路径表（`dev-clean` 用；每平台目录布局差异大：
+/// macOS ~/Library 布局 vs Linux ~/.cache / ~/.config 变体）
+pub trait DevEnvPaths {
+    /// 可清理的开发环境路径（收紧原则：只列可再生缓存，不列工具本体/配置/用户数据）
+    fn dev_envs(&self) -> Vec<crate::dev_env::DevEnv>;
+}
+
 #[cfg(not(target_os = "macos"))]
 mod fallback;
 #[cfg(target_os = "macos")]

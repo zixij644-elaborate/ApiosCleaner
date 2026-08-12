@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use super::{AppMetadata, ProcessControl, SpotlightIndex, SystemPaths, Trash};
+use super::{AppMetadata, DevEnvPaths, ProcessControl, SpotlightIndex, SystemPaths, Trash};
 use crate::app_info;
+use crate::dev_env::DevEnv;
 use crate::format::pear_format;
 use crate::model::{AppInfo, Sensitivity};
 
@@ -403,6 +404,164 @@ impl ProcessControl for MacOsAdapter {
     }
 }
 
+/// 开发环境路径表（原版 PathLibrary 收紧版，macOS 布局）。
+/// 收紧原则（2026-08-12）：只列**可再生缓存**——DerivedData、各 cache 目录、
+/// registry 缓存等；移除工具本体（~/.cargo、~/.nvm、conda 发行版、pyenv、gem）、
+/// 配置（Application Support 根、User、.config 根）、用户数据（Xcode Archives、
+/// CoreSimulator 设备、Android AVD）。
+/// 与原版相比移除的环境：Conda（无安全缓存条目）、Ruby Gems（无独立缓存目录）。
+fn dev_envs_table() -> Vec<DevEnv> {
+    let p = |s: &str| s.to_string();
+    vec![
+        DevEnv {
+            name: "Android Studio".into(),
+            paths: vec![
+                p("~/Library/Logs/AndroidStudio/"),
+                p("~/Library/Caches/Google/AndroidStudio*/"),
+            ],
+        },
+        DevEnv {
+            name: "Cargo".into(),
+            paths: vec![p("~/.cargo/git/"), p("~/.cargo/registry/")],
+        },
+        DevEnv {
+            name: "Carthage".into(),
+            paths: vec![
+                p("~/Carthage/"),
+                p("~/Library/Caches/org.carthage.CarthageKit/"),
+            ],
+        },
+        DevEnv {
+            name: "CocoaPods".into(),
+            paths: vec![p("~/Library/Caches/CocoaPods/"), p("~/.cocoapods/repos/")],
+        },
+        DevEnv {
+            name: "Composer".into(),
+            paths: vec![p("~/.composer/cache/")],
+        },
+        DevEnv {
+            name: "Cursor".into(),
+            paths: vec![
+                p("~/Library/Application Support/Cursor/Cache"),
+                p("~/Library/Application Support/Cursor/GPUCache"),
+                p("~/Library/Application Support/Cursor/CachedConfigurations"),
+                p("~/Library/Application Support/Cursor/CachedData"),
+                p("~/Library/Application Support/Cursor/CachedExtensionVSIXs"),
+                p("~/Library/Application Support/Cursor/CachedExtensions"),
+                p("~/Library/Application Support/Cursor/CachedProfilesData"),
+                p("~/Library/Application Support/Cursor/Code Cache"),
+            ],
+        },
+        DevEnv {
+            name: "Deno".into(),
+            paths: vec![p("~/Library/Caches/deno")],
+        },
+        DevEnv {
+            name: "Go Modules".into(),
+            paths: vec![p("~/go/pkg/mod/")],
+        },
+        DevEnv {
+            name: "Gradle".into(),
+            paths: vec![p("~/.gradle/caches/"), p("~/.gradle/wrapper/")],
+        },
+        DevEnv {
+            name: "Haskell Stack".into(),
+            paths: vec![p("~/.stack/snapshots/")],
+        },
+        DevEnv {
+            name: "IntelliJ IDEA".into(),
+            paths: vec![
+                p("~/Library/Caches/JetBrains/"),
+                p("~/Library/Logs/JetBrains/"),
+            ],
+        },
+        DevEnv {
+            name: "Maven".into(),
+            paths: vec![p("~/.m2/repository/")],
+        },
+        DevEnv {
+            name: "Nix".into(),
+            paths: vec![p("~/.cache/nix/")],
+        },
+        DevEnv {
+            name: "Npm".into(),
+            paths: vec![
+                p("~/.npm/"),
+                p("~/Library/pnpm/store"),
+                p("~/.bun/install/cache"),
+            ],
+        },
+        DevEnv {
+            name: "Pip".into(),
+            paths: vec![p("~/Library/Caches/pip/")],
+        },
+        DevEnv {
+            name: "Poetry".into(),
+            paths: vec![p("~/Library/Caches/pypoetry/")],
+        },
+        DevEnv {
+            name: "Pub".into(),
+            paths: vec![p("~/.pub-cache/"), p("~/Library/Caches/flutter_engine/")],
+        },
+        DevEnv {
+            name: "Pyenv".into(),
+            paths: vec![p("~/.pyenv/cache/")],
+        },
+        DevEnv {
+            name: "Swift".into(),
+            paths: vec![p("~/.swiftpm/")],
+        },
+        DevEnv {
+            name: "Uv".into(),
+            paths: vec![p("~/.cache/uv/")],
+        },
+        DevEnv {
+            name: "VS Code".into(),
+            paths: vec![
+                p("~/Library/Application Support/Code/Cache"),
+                p("~/Library/Application Support/Code/GPUCache"),
+                p("~/Library/Application Support/Code/CachedConfigurations"),
+                p("~/Library/Application Support/Code/CachedData"),
+                p("~/Library/Application Support/Code/CachedExtensionVSIXs"),
+                p("~/Library/Application Support/Code/CachedExtensions"),
+                p("~/Library/Application Support/Code/CachedProfilesData"),
+                p("~/Library/Application Support/Code/Code Cache"),
+            ],
+        },
+        DevEnv {
+            name: "Xcode".into(),
+            paths: vec![
+                p("~/Library/Caches/com.apple.dt.xcodebuild/"),
+                p("~/Library/Caches/com.apple.dt.Xcode.sourcecontrol.Git/"),
+                p("~/Library/Developer/DeveloperDiskImages/"),
+                p("~/Library/Developer/Xcode/DerivedData/"),
+                p("~/Library/Developer/Xcode/DocumentationCache/"),
+                p("~/Library/Developer/Xcode/iOS DeviceSupport/"),
+                p("~/Library/Developer/Xcode/tvOS DeviceSupport/"),
+                p("~/Library/Developer/Xcode/watchOS DeviceSupport/"),
+                p("~/Library/Developer/Xcode/macOS DeviceSupport/"),
+            ],
+        },
+        DevEnv {
+            name: "Yarn".into(),
+            paths: vec![p("~/.cache/yarn/"), p("~/.yarn-cache/")],
+        },
+        DevEnv {
+            name: "Zed".into(),
+            paths: vec![
+                p("~/Library/Caches/Zed/"),
+                p("~/Library/Application Support/Zed/node/cache/"),
+            ],
+        },
+    ]
+}
+
+impl DevEnvPaths for MacOsAdapter {
+    fn dev_envs(&self) -> Vec<DevEnv> {
+        dev_envs_table()
+    }
+}
+
 /// NSPredicate 字符串转义：单引号 → ''（SQL 风格，Spotlight 查询语法）
 fn escape_predicate_value(value: &str) -> String {
     value.replace('\'', "''")
@@ -543,6 +702,50 @@ mod tests {
             p,
             "kMDItemDisplayName == 'It''s App'cd || kMDItemDisplayName == 'com.it.sapp'cd"
         );
+    }
+
+    #[test]
+    fn test_dev_envs_tightened() {
+        // 收紧验证：不列工具本体 / 系统包存储 / 配置 / 用户数据
+        let envs = dev_envs_table();
+        assert_eq!(envs.len(), 24); // 原版 26 环境，移除 Conda 与 Ruby Gems
+        let all: Vec<&str> = envs
+            .iter()
+            .flat_map(|e| e.paths.iter().map(|p| p.as_str()))
+            .collect();
+        // 完全不出现的路径（前缀禁止）
+        for forbidden in [
+            "/nix/store/",
+            "anaconda3/",
+            "miniconda3/",
+            "~/go/bin/",
+            "~/.gem/",
+            "Archives/",
+            "CoreSimulator/",
+            "~/.android/",
+            "~/Library/Application Support/JetBrains/", // IDE 配置
+            "~/Library/Application Support/Google/AndroidStudio", // IDE 配置
+        ] {
+            assert!(
+                !all.iter().any(|p| p.starts_with(forbidden)),
+                "路径表不应包含路径 {forbidden}"
+            );
+        }
+        // 工具本体根条目不得出现（其下缓存子路径合法：git/registry/cache）
+        for root in ["~/.cargo/", "~/.nvm/", "~/.pyenv/", "~/.conda/"] {
+            assert!(
+                !all.iter().any(|p| p == &root),
+                "路径表不应包含工具本体根目录 {root}"
+            );
+        }
+        // 配置根（Application Support 根、User、.config 根）不得出现
+        assert!(!all.iter().any(|p| p.ends_with("Support/Cursor/")));
+        assert!(!all.iter().any(|p| p.ends_with("Support/Code/")));
+        assert!(!all.iter().any(|p| p.ends_with("/User")));
+        // 核心目标必须保留
+        assert!(all.iter().any(|p| p.contains("DerivedData")));
+        assert!(all.iter().any(|p| p.contains("gradle/caches")));
+        assert!(all.iter().any(|p| p.contains("registry")));
     }
 
     #[test]

@@ -1,14 +1,20 @@
-//! 开发环境缓存清理 —— 移植原版 `PathLibrary` 的路径表 + 目录大小统计
-//! (old/Pearcleaner/Views/DevelopmentView.swift:1603-1750, 884-910)
+//! 开发环境缓存清理 —— 核心纯逻辑（平台无关）
 //!
-//! 语义要点：
-//! - 每个"开发环境"是一组路径（~ 展开 + 支持 `*` 通配段），大多是可再生的缓存/包存储
-//! - 清理 = 把目录**内容**移入回收站（原版 deleteFolderContents），保留目录本身
-//! - 大小统计 = 递归求和（跳过隐藏文件，与原版 skipsHiddenFiles 一致）
+//! 路径表按平台分布在适配层（trait `DevEnvPaths`：macOS 完整表 / Linux 子集），
+//! 本模块只保留与平台无关的部分：
+//! - `~` 展开、`*` 通配段展开、目录大小递归统计、嵌套去重、人类可读大小
+//! - `find_env` / `env_sizes` 从当前平台适配器取路径表
+//!
+//! 清理语义（原版 deleteFolderContents）：把目录**内容**移入回收站，保留目录本身。
+//! 路径表收紧原则（2026-08-12）：只列**可再生缓存**（DerivedData、各 cache、
+//! registry 等），不列工具本体（~/.cargo、~/.nvm、conda 发行版）、配置（Application
+//! Support 根、.config 根、User）、用户数据（Xcode Archives、模拟器设备）。
 
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
+
+use crate::platform::DevEnvPaths;
 
 /// 单个开发环境（原版 PathEnv）
 #[derive(Debug, Clone)]
@@ -19,222 +25,6 @@ pub struct DevEnv {
 
 /// 环境 + 各存在路径的大小（字节）
 pub type EnvSize = (DevEnv, Vec<(PathBuf, u64)>);
-
-/// 路径表（PathLibrary.getPaths 移植，26 个环境）。
-/// 与原版差异：Nix 移除了 `/nix/store/` —— 系统级包存储，CLI 一键清空不可接受；
-/// 保留可再生的 `~/.cache/nix/`。
-pub fn dev_environments() -> Vec<DevEnv> {
-    vec![
-        DevEnv {
-            name: "Android Studio".into(),
-            paths: [
-                "~/.android/",
-                "~/Library/Application Support/Google/AndroidStudio*/",
-                "~/Library/Logs/AndroidStudio/",
-                "~/Library/Caches/Google/AndroidStudio*/",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        },
-        DevEnv {
-            name: "Cargo".into(),
-            paths: ["~/.cargo/", "~/.cargo/git/", "~/.cargo/registry/"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        DevEnv {
-            name: "Carthage".into(),
-            paths: ["~/Carthage/", "~/Library/Caches/org.carthage.CarthageKit/"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        DevEnv {
-            name: "CocoaPods".into(),
-            paths: ["~/Library/Caches/CocoaPods/", "~/.cocoapods/repos/"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        DevEnv {
-            name: "Composer".into(),
-            paths: ["~/.composer/cache/"].map(str::to_string).to_vec(),
-        },
-        DevEnv {
-            name: "Conda".into(),
-            paths: ["~/.conda/", "~/anaconda3/", "~/miniconda3/"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        DevEnv {
-            name: "Cursor".into(),
-            paths: [
-                "~/Library/Application Support/Cursor/",
-                "~/Library/Application Support/Cursor/Cache",
-                "~/Library/Application Support/Cursor/GPUCache",
-                "~/Library/Application Support/Cursor/CachedConfigurations",
-                "~/Library/Application Support/Cursor/CachedData",
-                "~/Library/Application Support/Cursor/CachedExtensionVSIXs",
-                "~/Library/Application Support/Cursor/CachedExtensions",
-                "~/Library/Application Support/Cursor/CachedProfilesData",
-                "~/Library/Application Support/Cursor/Code Cache",
-                "~/Library/Application Support/Cursor/User",
-                "~/.cursor/",
-                "~/.cursor/extensions/",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        },
-        DevEnv {
-            name: "Deno".into(),
-            paths: ["~/Library/Caches/deno"].map(str::to_string).to_vec(),
-        },
-        DevEnv {
-            name: "Go Modules".into(),
-            paths: ["~/go/bin/", "~/go/pkg/mod/"].map(str::to_string).to_vec(),
-        },
-        DevEnv {
-            name: "Gradle".into(),
-            paths: ["~/.gradle/caches/", "~/.gradle/wrapper/"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        DevEnv {
-            name: "Haskell Stack".into(),
-            paths: [
-                "~/.stack/",
-                "~/.stack/global-project/",
-                "~/.stack/snapshots/",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        },
-        DevEnv {
-            name: "IntelliJ IDEA".into(),
-            paths: [
-                "~/Library/Application Support/JetBrains/",
-                "~/Library/Caches/JetBrains/",
-                "~/Library/Logs/JetBrains/",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        },
-        DevEnv {
-            name: "Maven".into(),
-            paths: ["~/.m2/"].map(str::to_string).to_vec(),
-        },
-        DevEnv {
-            name: "Nix".into(),
-            paths: ["~/.cache/nix/"].map(str::to_string).to_vec(),
-        },
-        DevEnv {
-            name: "Npm".into(),
-            paths: [
-                "/usr/local/lib/node_modules/",
-                "~/.nvm/versions/node/*/",
-                "~/.npm/",
-                "~/.nvm/",
-                "~/Library/pnpm/store",
-                "~/.bun/install/cache",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        },
-        DevEnv {
-            name: "Pip".into(),
-            paths: ["~/Library/Caches/pip/"].map(str::to_string).to_vec(),
-        },
-        DevEnv {
-            name: "Poetry".into(),
-            paths: [
-                "~/Library/Caches/pypoetry/",
-                "~/Library/Application Support/pypoetry/",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        },
-        DevEnv {
-            name: "Pub".into(),
-            paths: ["~/.pub-cache/", "~/Library/Caches/flutter_engine/"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        DevEnv {
-            name: "Pyenv".into(),
-            paths: ["~/.pyenv/", "~/.pyenv/cache/"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        DevEnv {
-            name: "Ruby Gems".into(),
-            paths: ["~/.gem/", "~/.gem/ruby/*/"].map(str::to_string).to_vec(),
-        },
-        DevEnv {
-            name: "Swift".into(),
-            paths: ["~/.swiftpm/"].map(str::to_string).to_vec(),
-        },
-        DevEnv {
-            name: "Uv".into(),
-            paths: ["~/.cache/uv/", "~/.config/uv/", "~/.local/share/uv/"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        DevEnv {
-            name: "VS Code".into(),
-            paths: [
-                "~/Library/Application Support/Code/",
-                "~/Library/Application Support/Code/Cache",
-                "~/Library/Application Support/Code/GPUCache",
-                "~/Library/Application Support/Code/CachedConfigurations",
-                "~/Library/Application Support/Code/CachedData",
-                "~/Library/Application Support/Code/CachedExtensionVSIXs",
-                "~/Library/Application Support/Code/CachedExtensions",
-                "~/Library/Application Support/Code/CachedProfilesData",
-                "~/Library/Application Support/Code/Code Cache",
-                "~/Library/Application Support/Code/User",
-                "~/.vscode/",
-                "~/.vscode/extensions/",
-                "~/.vscode/cli/",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        },
-        DevEnv {
-            name: "Xcode".into(),
-            paths: [
-                "~/Library/Caches/com.apple.dt.xcodebuild/",
-                "~/Library/Caches/com.apple.dt.Xcode.sourcecontrol.Git/",
-                "~/Library/Developer/CoreSimulator/Devices/",
-                "~/Library/Developer/DeveloperDiskImages/",
-                "~/Library/Developer/Xcode/Archives/",
-                "~/Library/Developer/Xcode/DerivedData/",
-                "~/Library/Developer/Xcode/DocumentationCache/",
-                "~/Library/Developer/Xcode/iOS DeviceSupport/",
-                "~/Library/Developer/Xcode/tvOS DeviceSupport/",
-                "~/Library/Developer/Xcode/watchOS DeviceSupport/",
-                "~/Library/Developer/Xcode/macOS DeviceSupport/",
-                "~/Library/Developer/Xcode/UserData/",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        },
-        DevEnv {
-            name: "Yarn".into(),
-            paths: ["~/.cache/yarn/", "~/.yarn-cache/", "~/.yarn/global/"]
-                .map(str::to_string)
-                .to_vec(),
-        },
-        DevEnv {
-            name: "Zed".into(),
-            paths: [
-                "~/.config/zed/",
-                "~/Library/Caches/Zed/",
-                "~/Library/Application Support/Zed/",
-                "~/Library/Application Support/Zed/node/cache/",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        },
-    ]
-}
 
 /// 展开 `~`（首段为 `~` 或 `~/` 时替换为 home 路径）
 pub fn expand_home(pattern: &str, home: &str) -> String {
@@ -247,7 +37,7 @@ pub fn expand_home(pattern: &str, home: &str) -> String {
     }
 }
 
-/// 展开含 `*` 的路径段：匹配父目录下的条目（原版路径表里的 AndroidStudio*/node/* 等）
+/// 展开含 `*` 的路径段：匹配父目录下的条目（路径表里的 AndroidStudio*/node/* 等）
 pub fn expand_globs(pattern: &Path) -> Vec<PathBuf> {
     let pattern_str = pattern.to_string_lossy();
     if !pattern_str.contains('*') {
@@ -314,8 +104,8 @@ pub fn dir_size(path: &Path) -> u64 {
 }
 
 /// 嵌套去重：若路径的祖先已在列表中（其大小已包含父目录），移除子路径。
-/// 路径表常同时列父目录与子目录（如 `~/.cargo/` + `~/.cargo/registry/`），
-/// 合并清理时父目录已覆盖子目录，避免重复计算与重复删除。
+/// 路径表常同时列父目录与子目录（如 `~/.cargo/git/` 与 `~/.cargo/registry/` 无重叠，
+/// 但个别条目存在嵌套），合并清理时父目录已覆盖子目录，避免重复计算与重复删除。
 pub fn dedup_nested(dirs: &mut Vec<PathBuf>) {
     dirs.sort();
     dirs.dedup();
@@ -332,7 +122,8 @@ pub fn dedup_nested(dirs: &mut Vec<PathBuf>) {
 /// 所有环境的大小（rayon 并行：每个环境的路径独立，互不依赖）
 pub fn env_sizes() -> Vec<EnvSize> {
     let home = std::env::var("HOME").unwrap_or_default();
-    dev_environments()
+    crate::platform::adapter()
+        .dev_envs()
         .into_par_iter()
         .map(|env| {
             let mut dirs: Vec<PathBuf> = env
@@ -363,7 +154,8 @@ pub fn env_sizes() -> Vec<EnvSize> {
 pub fn find_env(name: &str) -> Option<DevEnv> {
     let lower = name.to_lowercase();
     if lower == "all" {
-        let combined = dev_environments()
+        let combined = crate::platform::adapter()
+            .dev_envs()
             .into_iter()
             .flat_map(|e| e.paths)
             .collect::<Vec<_>>();
@@ -372,7 +164,8 @@ pub fn find_env(name: &str) -> Option<DevEnv> {
             paths: combined,
         });
     }
-    dev_environments()
+    crate::platform::adapter()
+        .dev_envs()
         .into_iter()
         .find(|e| e.name.to_lowercase() == lower)
 }
@@ -454,7 +247,7 @@ mod tests {
         assert!(env.paths.iter().any(|p| p.contains("DerivedData")));
 
         let all = find_env("all").expect("all");
-        assert!(all.paths.len() > 50); // 全部环境路径合并
+        assert!(all.paths.len() > 30); // 全部环境路径合并
     }
 
     #[test]
@@ -494,15 +287,5 @@ mod tests {
         let mut dirs: Vec<PathBuf> = vec![];
         dedup_nested(&mut dirs);
         assert!(dirs.is_empty());
-    }
-
-    #[test]
-    fn test_nix_store_excluded() {
-        // 防御性差异：/nix/store/ 不得出现在路径表中
-        let nix = dev_environments()
-            .into_iter()
-            .find(|e| e.name == "Nix")
-            .unwrap();
-        assert!(!nix.paths.iter().any(|p| p.contains("/nix/store")));
     }
 }
