@@ -98,6 +98,12 @@ pub trait PluginPaths {
     fn plugin_categories(&self) -> Vec<crate::plugin::PluginCategory>;
 }
 
+/// 已安装应用发现（每平台机制不同：macOS walk .app / Windows 注册表卸载项 + 开始菜单 /
+/// Linux desktop 文件——TODO）。scan.rs 的 walk 逻辑保留给 macOS/Fallback 实现复用。
+pub trait AppDiscovery {
+    fn discover_installed_apps(&self) -> Vec<AppInfo>;
+}
+
 /// 适配器暴露本平台支持的包管理器（多包管理器入口）
 pub trait PackageManagers {
     fn package_managers(&self) -> Vec<Box<dyn PackageManager>>;
@@ -110,7 +116,7 @@ pub trait PackageManagers {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod fallback;
 #[cfg(target_os = "macos")]
 mod homebrew;
@@ -118,11 +124,15 @@ mod homebrew;
 pub mod lipo;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod windows;
 
 /// 当前平台的适配器类型（cfg 编译期选择）
 #[cfg(target_os = "macos")]
 pub type Adapter = macos::MacOsAdapter;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub type Adapter = windows::WindowsAdapter;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub type Adapter = fallback::FallbackAdapter;
 
 /// 当前平台的适配器实例
