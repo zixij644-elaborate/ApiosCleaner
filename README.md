@@ -2,37 +2,33 @@
 
 *ἄπιος (ápios) — ancient Greek for "pear"*
 
-A fast cross-platform app cleaner with a portable Rust core. The project
-started as a rewrite of [Pearcleaner](https://github.com/alienator88/Pearcleaner),
-but it is not a straight port: it fixes real safety and correctness defects in
-the original, rethinks the architecture for cross-platform use, and is
-evolving independently with new features (see the
-[Beyond a straight port](CHANGELOG.md#beyond-a-straight-port) section of the
-changelog).
-
-The engine is platform-agnostic: matching, scanning, and orphan-detection logic
-are pure Rust with no OS API dependency. Platform-specific behaviors (file
-layout, app metadata, trash semantics) live in a thin adapter layer, so the same
-core can ship as per-OS builds, each tuned for its platform.
+A fast cross-platform app cleaner with a portable Rust core. It started as a
+rewrite of [Pearcleaner](https://github.com/alienator88/Pearcleaner) but is
+not a straight port: real safety and correctness defects are fixed, the
+architecture is rethought for cross-platform use, and it evolves
+independently — see [Beyond a straight port](CHANGELOG.md#beyond-a-straight-port).
 
 > ⚠️ **Status**: v0.1.0 — first release. macOS adapter works (CLI); Linux/Windows
 > adapters compile with default XDG behavior; the GUI is planned.
 
 ## Why this project
 
+- **Universal binary thinning (`lipo`)** — a signature Pearcleaner feature
+  most other app cleaners lack. Apple Silicon Macs run universal binaries
+  (arm64 + x86_64), so most apps carry a dead second architecture; `apios
+  lipo` scans apps and thins them, often freeing half the binary's size.
+  Byte-identical to Apple's `lipo`, best-slice selection (arm64e, x86_64h
+  gated on AVX2), atomic replacement, confirmation-gated
 - **Speed**: full scan in ~0.4–2s
-- **Testability**: 105 unit tests covering scan/match/orphan/trash/lipo/pkg semantics
-- **Portable core**: type-checks for non-macOS targets with zero changes
-  (e.g. the Mach-O fat parser is fully cross-platform, verified byte-identical to `lipo`)
-- **Per-OS builds**: one engine, platform adapters that can be optimized
-  independently for each operating system
-- **Safety first**: all deletions are trash-based (reversible), critical system
-  paths are protected against normalization tricks, and every destructive
-  command asks for confirmation
-- **Not a straight port**: real safety and correctness defects are fixed —
-  details in the [changelog](CHANGELOG.md#beyond-a-straight-port)
-- **Future roadmap**: GUI shell → per-platform adapter polish (Linux
-  desktop files / flatpak, Windows registry / Recycle Bin)
+- **Portable core, per-OS builds**: matching, scanning, and orphan detection
+  are pure Rust with no OS API dependency and type-check unchanged on
+  non-macOS targets; platform behavior (paths, trash, Spotlight, package
+  managers) lives behind per-OS adapters that can be tuned independently
+- **Testability**: 105 unit tests covering scan/match/orphan/trash/lipo/pkg
+  semantics, with a Linux cross-check CI gate
+- **Safety first**: all deletions are trash-based (reversible), critical
+  system paths are protected against normalization tricks, and every
+  destructive command asks for confirmation
 
 ## Status
 
@@ -80,52 +76,53 @@ cargo install --git git@github.com:Zniece/ApiosCleaner.git --locked
 
 ## Usage
 
-The `<app>` argument accepts a full path, an app name (auto-looked-up in the
-default application folders), or `.` for the current directory. Deleting
-commands ask for confirmation (`y/N`, default no); pass `-y` to skip it
-(for scripting or GUI/automation integration).
+All examples assume `apios` is on your PATH (Install above). The `<app>`
+argument accepts a full path, an app name (auto-looked-up in the default
+application folders), or `.` for the current directory. Deleting commands
+ask for confirmation (`y/N`, default no); pass `-y` to skip it (for
+scripting or GUI/automation integration).
 
 ```sh
 # List all related files of an app (read-only)
-./target/release/apios list /Applications/SomeApp.app
-./target/release/apios list SomeApp
+apios list /Applications/SomeApp.app
+apios list SomeApp
 
 # Uninstall an app: the bundle and ALL related files, moved to Trash
-./target/release/apios uninstall SomeApp
+apios uninstall SomeApp
 
 # List orphaned files left behind by uninstalled apps (read-only)
-./target/release/apios orphan
+apios orphan
 
 # Delete all orphaned files
-./target/release/apios clean-orphan
+apios clean-orphan
 
 # List dev environment cache sizes (read-only)
-./target/release/apios dev-clean
+apios dev-clean
 
 # Clean one dev environment (e.g. Cargo, Gradle, Xcode), or "all"
-./target/release/apios dev-clean cargo
+apios dev-clean cargo
 
 # Package manager category (Homebrew on macOS): list installed packages
-./target/release/apios pkg brew list
+apios pkg brew list
 
 # Uninstall one package (type auto-detected; warns about dependents first;
 # --zap additionally removes cask user config, with extra confirmation)
-./target/release/apios pkg brew uninstall git
-./target/release/apios pkg brew uninstall --zap firefox
+apios pkg brew uninstall git
+apios pkg brew uninstall --zap firefox
 
 # Remove orphaned dependencies (dry-run is shown before confirmation)
-./target/release/apios pkg brew autoremove
+apios pkg brew autoremove
 
 # Lipo: scan all apps for universal (fat) binaries and show how much can be
 # freed (read-only); or scan a single app
-./target/release/apios lipo
-./target/release/apios lipo Firefox
+apios lipo
+apios lipo Firefox
 
 # Thin an app's universal binaries to the current architecture (irreversible;
 # asks for confirmation). Code signatures are invalidated by default; pass
 # --sign to re-sign thinned binaries ad-hoc (codesign -s -)
-./target/release/apios lipo thin Firefox
-./target/release/apios lipo thin --sign Firefox
+apios lipo thin Firefox
+apios lipo thin --sign Firefox
 ```
 
 ## Documentation
