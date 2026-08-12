@@ -149,15 +149,17 @@ pub fn entry_from_values(
         }
     };
     let display_name = get("DisplayName").filter(|n| !n.is_empty())?;
-    // DisplayIcon 常见 "C:\...\x.exe,0" 形态（图标索引后缀）—— 剥掉数字索引，
-    // 否则带 ",0" 的路径 is_file() 恒 false，条目被误判"已卸载"丢弃。
-    // 只剥纯数字后缀：路径本身含逗号（少见）时 rsplit 不会误伤（过滤非数字段）
+    // DisplayIcon 常见 "C:\...\x.exe,0" 形态（图标索引后缀 + 引号只包路径）——
+    // 剥索引、剥引号。否则带 ",0" 的路径 is_file() 恒 false，条目被误判
+    // "已卸载"丢弃。只剥纯数字后缀（路径本身含逗号时 rsplit 不误伤）
     let display_icon = get("DisplayIcon").map(|s| {
-        let s = strip_quotes(&s);
-        s.rsplit_once(',')
+        let s = s.trim();
+        let path = s
+            .rsplit_once(',')
             .filter(|(_, idx)| !idx.is_empty() && idx.chars().all(|c| c.is_ascii_digit()))
-            .map(|(p, _)| p.to_string())
-            .unwrap_or(s)
+            .map(|(p, _)| p)
+            .unwrap_or(s);
+        strip_quotes(path)
     });
     Some(UninstallEntry {
         display_name,

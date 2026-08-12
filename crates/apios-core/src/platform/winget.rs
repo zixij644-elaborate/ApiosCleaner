@@ -246,9 +246,12 @@ mod tests {
             Foo    foo.id  > 1.2.3   1.2.4      winget\n\
             Bar    bar.id  Unknown             winget\n";
         let pkgs = parse_winget_list(out);
-        assert_eq!(pkgs[0].version, "1.2.3");
+        // 解析器按 name 排序 —— 按名查找而非索引
+        let foo = pkgs.iter().find(|p| p.name == "Foo").unwrap();
+        assert_eq!(foo.version, "1.2.3");
         // Unknown 保留原样（winget 确实不知道版本）
-        assert_eq!(pkgs[1].version, "Unknown");
+        let bar = pkgs.iter().find(|p| p.name == "Bar").unwrap();
+        assert_eq!(bar.version, "Unknown");
     }
 
     #[test]
