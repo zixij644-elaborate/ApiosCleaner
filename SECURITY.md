@@ -1,6 +1,6 @@
-# Security Policy
+[English](SECURITY.md) | [中文](docs/zh-CN/SECURITY.zh-CN.md)
 
-[中文版](docs/zh-CN/SECURITY.zh-CN.md)
+# Security Policy
 
 ## Reporting a vulnerability
 

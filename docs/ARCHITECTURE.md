@@ -1,6 +1,6 @@
-# Architecture
+[English](ARCHITECTURE.md) | [中文](zh-CN/ARCHITECTURE.zh-CN.md)
 
-[中文版](zh-CN/ARCHITECTURE.zh-CN.md)
+# Architecture
 
 ApiosCleaner is a cross-platform app cleaner built around a **portable Rust
 core** and a thin **platform adapter layer**. All matching, scanning, and
