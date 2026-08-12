@@ -6,8 +6,7 @@
 
 一款快速的跨平台应用清理工具，核心采用可移植的 Rust 引擎。它起源于
 [Pearcleaner](https://github.com/alienator88/Pearcleaner) 的重写，但并非照搬：
-我们修复了原版实际存在的安全与正确性缺陷，重新设计了跨平台架构，并独立演进——
-详见[中文路线图](docs/ApiosCleaner-项目进度与路线图.md)。
+我们修复了原版实际存在的安全与正确性缺陷，重新设计了跨平台架构，并独立演进。
 
 > ⚠️ **当前状态**：v0.2.0 — macOS 和 Windows 适配器已可 CLI 使用；Linux 可编译，
 > 默认 XDG 行为；GUI 规划中。
@@ -157,8 +156,6 @@ apios pkg winget uninstall 7-Zip
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 可移植核心 + 适配器模式、模块图和
   安全模型
-- [docs/ApiosCleaner-项目进度与路线图.md](docs/ApiosCleaner-项目进度与路线图.md) —
-  路线图、里程碑状态和跨平台开发流程
 - [CHANGELOG.md](CHANGELOG.md) — 发布历史
 
 ## 许可证
