@@ -79,7 +79,32 @@ fn deleted_message(count: usize, bundle_folder: &std::path::Path) -> String {
 #[command(
     name = "apios",
     version,
-    about = "ApiosCleaner — a fast cross-platform app cleaner"
+    about = "ApiosCleaner — a fast cross-platform app cleaner",
+    long_about = "ApiosCleaner finds every file an app left behind and cleans it up: \
+full uninstalls, orphan files from already-uninstalled apps, dev-environment \
+caches, plugin directories, package-manager packages, and (on macOS) dead \
+architectures in universal binaries.\n\n\
+Deletions are safe by design:\n  \
+• every destructive command prints what it will do and asks for confirmation \
+(y/N, default no; -y skips it for scripting)\n  \
+• files are moved to the Trash (macOS/Linux) or the Recycle Bin (Windows), \
+never permanently deleted\n  \
+• critical system paths are protected against normalization tricks\n\n\
+Platform notes:\n  \
+• macOS — full feature set, incl. Homebrew and lipo\n  \
+• Windows — registry + Start Menu discovery, Recycle Bin via the system API, \
+dev caches, winget\n  \
+• Linux — compiles with default XDG behavior",
+    after_long_help = "EXAMPLES:\n  \
+apios list Firefox                    List everything Firefox leaves behind\n  \
+apios uninstall Firefox               Move Firefox + all its files to the Trash\n  \
+apios orphan                          Show orphans from uninstalled apps\n  \
+apios clean-orphan                    Delete them (after confirmation)\n  \
+apios dev-clean cargo                 Show/clean the Cargo cache\n  \
+apios pkg brew uninstall git          Uninstall a Homebrew package\n  \
+apios plugins --clean audio           Delete audio plugins\n  \
+apios lipo thin Firefox               Thin Firefox's universal binaries (macOS)\n\n\
+See also: apios <command> --help for command-specific details."
 )]
 struct Cli {
     /// Skip confirmation prompts (for scripting and GUI/automation integration)
@@ -92,45 +117,157 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// List all related files of an app (read-only)
+    #[command(
+        long_about = "List every file an app owns outside its bundle: caches, preferences, saved \
+state, Application Support, launch agents, … (read-only; nothing is modified).\n\n\
+<app> accepts a full path, an app name (looked up in the default application folders), \
+or \".\" for the current directory. On Windows it accepts a registry DisplayName (e.g. \
+\"7-Zip\"), an installer path, or a .lnk path — there is no bundle_identifier, so \
+matching falls back to display-name / path keywords.",
+        after_long_help = "EXAMPLES:\n  \
+apios list /Applications/Firefox.app\n  \
+apios list Firefox\n  \
+apios list .\n\n\
+On Windows:\n  \
+apios list \"7-Zip\""
+    )]
     List {
-        /// Path to the app bundle, app name, or "." for the current directory
+        /// Full path to the app, an app name (looked up in the default application
+        /// folders), or "." for the current directory.
+        /// Windows: registry DisplayName, installer path, or .lnk path.
         app: String,
     },
     /// Uninstall an app: the bundle and ALL related files, moved to Trash
+    #[command(
+        long_about = "Move an app and ALL its related files to the Trash: the .app bundle, \
+caches, preferences, saved state, Application Support, launch agents, …\n\n\
+Asks for confirmation (y/N, default no) unless -y is given. Files are moved to a \
+timestamped archive folder in the Trash (macOS/Linux) or the Recycle Bin (Windows) — \
+nothing is ever permanently deleted.",
+        after_long_help = "EXAMPLES:\n  \
+apios uninstall Firefox\n  \
+apios uninstall -y Firefox          # no confirmation (scripting)"
+    )]
     Uninstall {
-        /// Path to the app bundle, app name, or "." for the current directory
+        /// Full path to the app, an app name (looked up in the default application
+        /// folders), or "." for the current directory.
+        /// Windows: registry DisplayName, installer path, or .lnk path.
         app: String,
     },
     /// List orphaned files left behind by uninstalled apps (read-only)
+    #[command(
+        long_about = "Show files left behind by apps that are no longer installed \
+(read-only): caches, preferences, and support files whose owning app has gone. \
+Detection uses a prebuilt UUID → bundle-id map plus name heuristics.\n\n\
+Live apps are never listed — if an app is found again later, its files stop being \
+orphans."
+    )]
     Orphan,
     /// Delete all orphaned files (asks for confirmation)
+    #[command(
+        long_about = "Delete all orphaned files (after confirmation). Same safety model as \
+uninstall: files move to the Trash/Recycle Bin, never permanent; critical system paths \
+are protected."
+    )]
     CleanOrphan,
     /// List dev environment caches (read-only); with <env>, clean it
+    #[command(
+        long_about = "Inspect and clean dev-environment caches.\n\n\
+With no <env>: list every known dev environment with its cache location and size \
+(read-only).\n\n\
+With <env>: clean that environment's cache after confirmation — or \"all\" for every \
+known environment. The caches (Cargo, npm, pip, Gradle, Xcode, …) are regenerable by \
+the tools themselves; nothing personal is deleted.",
+        after_long_help = "EXAMPLES:\n  \
+apios dev-clean                   # sizes of all dev caches\n  \
+apios dev-clean cargo             # clean the Cargo cache\n  \
+apios dev-clean all               # clean every known dev cache"
+    )]
     DevClean {
         /// Environment name (case-insensitive), or "all" for everything
+        #[arg(
+            long_help = "Environment name (case-insensitive), e.g. cargo, npm, pip, uv, \
+gradle, maven, go, deno, yarn, xcode, vscode, jetbrains, android, composer — or \"all\" \
+for everything."
+        )]
         env: Option<String>,
     },
     /// Manage packages installed via a package manager (e.g. Homebrew)
+    #[command(
+        long_about = "Manage packages installed through a package manager.\n\n\
+On macOS this is Homebrew (formulae and casks); on Windows, winget. The <pm> selector \
+picks the manager: \"brew\" on macOS, \"winget\" on Windows.",
+        after_long_help = "EXAMPLES:\n  \
+apios pkg brew list\n  \
+apios pkg brew uninstall git\n  \
+apios pkg brew uninstall --zap firefox\n  \
+apios pkg brew autoremove\n\n\
+On Windows:\n  \
+apios pkg winget list\n  \
+apios pkg winget uninstall \"7-Zip\""
+    )]
     Pkg {
         /// Package manager selector, e.g. "brew"
+        #[arg(
+            long_help = "Package manager selector: \"brew\" on macOS, \"winget\" on \
+Windows."
+        )]
         pm: String,
         #[command(subcommand)]
         action: PkgAction,
     },
     /// Scan and clean plugin directories (audio, preference panes, quick look, ...)
+    #[command(
+        long_about = "Scan plugin directories (read-only by default): audio components, \
+preference panes, QuickLook generators, screen savers, Mail bundles, … — 18 categories \
+on macOS.\n\n\
+With <category>, show only that category (case-insensitive). With --clean, delete \
+plugins instead: everything listed is moved to the Trash after confirmation.",
+        after_long_help = "EXAMPLES:\n  \
+apios plugins                     # all categories\n  \
+apios plugins audio               # audio components only\n  \
+apios plugins --clean             # delete all listed plugins\n  \
+apios plugins --clean audio       # delete audio plugins only"
+    )]
     Plugins {
         /// Category name to show (case-insensitive); omit for all
+        #[arg(long_help = "Category name to show (case-insensitive); omit for all.")]
         category: Option<String>,
         /// Delete the listed plugins instead of just listing (asks for confirmation).
         /// Optional category name; omit for all
-        #[arg(long, num_args = 0..=1, default_missing_value = "all")]
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_missing_value = "all",
+            long_help = "Delete the listed plugins instead of just listing them (asks for \
+confirmation). With an optional category name, only that category is cleaned; without \
+one, all categories are cleaned."
+        )]
         clean: Option<String>,
     },
     /// Scan apps for universal (fat) binaries; thin them to the current architecture
     /// (macOS only: universal binaries are a Darwin format)
     #[cfg(target_os = "macos")]
+    #[command(
+        long_about = "Scan apps for universal (fat) binaries and report how much space could \
+be freed (read-only).\n\n\
+Apple Silicon Macs run universal binaries (arm64 + x86_64), so most apps carry a dead \
+second architecture; thinning it away often frees roughly half the binary's size. \
+Output is byte-identical to Apple's lipo; the best slice is kept (arm64e preferred, \
+x86_64h gated on AVX2).\n\n\
+macOS only — the command is not compiled on other platforms.",
+        after_long_help = "EXAMPLES:\n  \
+apios lipo                         # scan all apps\n  \
+apios lipo Firefox                 # scan one app\n  \
+apios lipo thin Firefox            # thin one app (irreversible)\n  \
+apios lipo thin --sign Firefox     # thin and re-sign ad-hoc"
+    )]
     Lipo {
         /// App path or name to scan; omit to scan all apps in the default folders
+        #[arg(
+            long_help = "App path or name to scan; omit to scan all apps in the default \
+folders."
+        )]
         app: Option<String>,
         #[command(subcommand)]
         action: Option<LipoAction>,
@@ -140,17 +277,44 @@ enum Command {
 #[derive(Subcommand)]
 enum PkgAction {
     /// List installed packages (formulae and casks)
+    #[command(
+        long_about = "List packages installed through the selected manager (read-only). \
+On macOS, formulae and casks are listed separately."
+    )]
     List,
     /// Uninstall one package (formula or cask; type auto-detected)
+    #[command(
+        long_about = "Uninstall one package. On macOS the type (formula or cask) is \
+auto-detected, and packages that depend on it are shown before the confirmation \
+prompt.\n\n\
+--zap (casks only) additionally removes user config and preferences — irreversible, and \
+asks for an extra confirmation (skipped with -y).",
+        after_long_help = "EXAMPLES:\n  \
+apios pkg brew uninstall git\n  \
+apios pkg brew uninstall --zap firefox\n  \
+apios pkg winget uninstall \"7-Zip\""
+    )]
     Uninstall {
         /// Package name as installed, e.g. "git" or "firefox"
+        #[arg(
+            long_help = "Package name as installed, e.g. \"git\" or \"firefox\"; on Windows, \
+the winget package name or ID (case-insensitive)."
+        )]
         name: String,
         /// Casks only: also remove user config and preferences (irreversible;
         /// asks for extra confirmation; skipped with -y)
-        #[arg(long)]
+        #[arg(
+            long,
+            long_help = "Casks only: also remove user config and preferences. Irreversible; \
+asks for an extra confirmation (skipped with -y)."
+        )]
         zap: bool,
     },
     /// Remove orphaned dependencies (dry-run is shown first; asks for confirmation)
+    #[command(
+        long_about = "Remove packages nothing depends on anymore (macOS only). A dry-run \
+is shown first, then confirmation."
+    )]
     Autoremove,
 }
 
@@ -158,11 +322,24 @@ enum PkgAction {
 #[derive(Subcommand)]
 enum LipoAction {
     /// Thin universal binaries in an app to the current architecture (irreversible)
+    #[command(
+        long_about = "Thin an app's universal binaries to the current architecture \
+(irreversible; asks for confirmation).\n\n\
+Code signatures are invalidated by the change; pass --sign to re-sign the thinned \
+binaries ad-hoc (codesign -s -).",
+        after_long_help = "EXAMPLES:\n  \
+apios lipo thin Firefox\n  \
+apios lipo thin --sign Firefox     # re-sign ad-hoc after thinning"
+    )]
     Thin {
         /// App path or name, or "." for the current directory
         app: String,
         /// Also re-sign thinned binaries ad-hoc (codesign -s -) to fix broken signatures
-        #[arg(long)]
+        #[arg(
+            long,
+            long_help = "Re-sign the thinned binaries ad-hoc (codesign -s -) so they keep \
+working; without it, code signatures are invalidated by thinning."
+        )]
         sign: bool,
     },
 }
