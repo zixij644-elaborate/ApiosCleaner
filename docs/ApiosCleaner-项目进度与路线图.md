@@ -166,7 +166,7 @@ Windows 移植里程碑（2026-08-12）：
 
 | 指标 | 值 |
 |---|---|
-| 单元测试 | 110/110 通过（core 106 + apios 4；另有 Windows 专属套件——注册表/回收站/winget 解析——在 windows-latest CI 原生跑） |
+| 单元测试 | macOS 106/106 + Linux 64/64 + Windows 82/82（lib）+ 4/4（bin），三平台 CI 全绿 |
 | 对照验证（Pearcleaner.app） | **9/9 完全一致**，耗时 0.43s vs 原版 ~10 分钟 |
 | 对照验证（Microsoft Edge.app） | **17/17 完全一致**，耗时 0.4s |
 | 孤儿输出（本机实测） | 24 项，2 秒（参考版因上游 bug 无法对照，已代码级验证） |
@@ -200,3 +200,7 @@ Windows 移植里程碑（2026-08-12）：
 > - **平台旗舰功能战略（2026-08-12）**：lipo 价值公式 = **平台独有结构 × 真实痛点**。背景：macOS 26 Tahoe 是最后支持 Intel 的版本，macOS 27 起纯 Apple Silicon，Rosetta 2 在 macOS 28（2027）移除大部分功能 —— lipo 的瘦身对象（universal 二进制中的死重切片）仍将在 2027-2029 达到峰值（Rosetta 退役后 x86_64 切片零风险可删），之后随生态转向纯 arm64 逐步衰减（约 5 年生命周期）；且 lipo 本身是 macOS 专属，Windows/Linux 无对等物。**决策：每个平台一个旗舰功能** —— Windows = **WSL 磁盘瘦身**（vhdx 只增不减、`wsl --shrink` 鲜为人知，生态独有无对等物，与 lipo 同构）；Linux = **生态包清理**（Flatpak 未用 runtime / Snap 旧版本 / 孤儿包，复用 `pkg` trait，成本低）。已评估不做：32 位切片瘦身（i386/ppc/armv7）—— fat 解析已支持、技术可行，但 2026 年存量稀少、切片小、收益与签名失效风险不成比例。实现排期：随阶段三适配器落地。
 > - **M7 架构清扫（2026-08-12，531204e）**：审查闭环——critical 表移入 `SystemPaths::critical_paths()`（三平台各持其表，核心 trash.rs 的 cfg(windows)/env 直读清零；Linux 表从 macOS 形换成真实 Linux 系统根，净收紧）；Steam 规则加平台归属注释（macOS 形态字面量，Windows/Linux 恒不命中，登记阶段五数据表外部化）；win_registry 写 API 全部 cfg(test) 门控 + Windows target check 归零警告。验证：110 测试全绿 + clippy 0 警告 + 双 target 0 警告。
 > - **多平台协同流程（2026-08-12）**：用户决策——**混合模式**（macOS 主会话日常开发 + Kali 经 ssh 驱动 Linux 验证；Windows 本机开原生会话处理 Windows 专属问题或人肉走查）；路线图移入仓库（docs/，仓库内为唯一工作版本，外部原文件改指引入库版占位，不再双写）；待办 repo 级 CLAUDE.md（Windows/Kali agent 启动即加载架构原则、无 AI 署名提交规则、验证门禁、平台分工）。
+> - **Linux 验证链路打通（2026-08-12，M8-M9）**：GitHub main 长期落后本地（M1-M8 未推送，快照证据：scan/trash 直读 `HOME` 的旧代码）→ 全部推送后，Kali VM（PD prlctl exec + 目录内工具链，`HOME=/` 退化环境）与 CI 首跑连续暴露测试平台泄漏：dev_env 测试去 macOS 假设、`default_app_folders` 改 XDG 分流（M8）；trash 三个测试改 critical 表逐项断言、`{home}/Applications` 断言加 `HOME=/` 守卫（M9）。Linux 全量 64+4 全绿 + CLI 冒烟通过（dev-clean 列表、orphan 扫出真实残留）。VM 影响全程锁在 `~/桌面/apios`（1.2G：工具链+缓存+源码），用户确认保留。
+> - **CI 闭环（2026-08-12）**：推送后 CI 暴露并修复 2 类 workflow/链接问题——`dtolnay/rust-toolchain` 的 `targets` 输入是**字符串非数组**（workflow 校验层直接拒，三个 run 0s 失败；actionlint 定位）；windows FFI 缺 `#[link]` 声明（Reg*W → advapi32、SHFileOperationW → shell32；cross-check 只 check 不链接，M1 以来从未暴露）。
+> - **Windows 原生首跑 6 项修复（2026-08-12，M10）**：windows job 首次真实链接+运行，修复 2 个**生产 bug** + 4 个测试问题——**`widen()` 补 NUL 结尾**（Win32 字符串 API 读越界字节，键名/值名随机写歪；`all_uninstall_entries` 生产路径同受）、**`recycle_batch` 先滤不存在的路径**（事后存在性检查无法区分"批量中已移走"与"本就不存在"，幽灵路径被计入 moved）；winget 排序测试输入改真实列宽（解析器按 ≥2 空格分列，该测试此前从未在任何平台运行）、search 两测试改 `Path::ends_with` 组件匹配（`/` 字面量 vs Windows `\`）、validate_path_windows 放行断言笔误（多余 `!`）。验证：Windows 原生 82+4 全绿 + artifact 产出。
+> - **PR #1 合并（2026-08-12）**：外部贡献 `docs: add Chinese README translation`（新增 README.zh-CN.md，169 行）已合并，PR 与合并后 push 两个 CI run 全绿。
