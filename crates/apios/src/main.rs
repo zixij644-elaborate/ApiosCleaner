@@ -458,6 +458,14 @@ fn resolve_app_or_exit(arg: &str) -> PathBuf {
     match resolved {
         Some(p) => p,
         None => {
+            // Windows 的发现源是注册表卸载项 + 开始菜单（AppDiscovery），
+            // 不是目录列表 —— 列 XDG/目录会让用户以为在错误的地方查找
+            #[cfg(windows)]
+            eprintln!(
+                "apios: cannot find \"{arg}\" as a path or an installed app \
+                 (searched the registry uninstall entries and the Start Menu)"
+            );
+            #[cfg(not(windows))]
             eprintln!(
                 "apios: cannot find \"{arg}\" as a path or an installed app (looked in {})",
                 folders

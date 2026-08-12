@@ -23,7 +23,17 @@ pub fn default_app_folders(home: &str) -> Vec<String> {
             "/Users/Shared/Applications".to_string(),
         ]
     }
-    #[cfg(not(target_os = "macos"))]
+    // Windows 应用发现走注册表 + 开始菜单（AppDiscovery），目录列表只作
+    // 上下文参考（开始菜单 Programs + Desktop），避免泄漏 XDG 路径
+    #[cfg(target_os = "windows")]
+    {
+        vec![
+            format!("{home}/Desktop"),
+            format!("{home}/AppData/Roaming/Microsoft/Windows/Start Menu/Programs"),
+            format!("{home}/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup"),
+        ]
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         vec![
             format!("{home}/Applications"),
