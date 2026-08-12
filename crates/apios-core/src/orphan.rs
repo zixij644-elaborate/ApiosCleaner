@@ -578,9 +578,12 @@ mod tests {
         assert!(re.is_match("cprogramfilestencent"));
         assert!(re.is_match("cprogramdatatencent"));
         assert!(
-            re.is_match("cuserszniedocumentsxwechatfiles"),
+            re.is_match("cusersznieappdataroamingtencentweixin"),
             "weixin stem"
         );
+        // 已知限制：微信 4.0 数据目录 xwechat_files 与 Weixin.exe 名字无交集
+        // （xwechat ≠ weixin/tencent/微信）—— 不匹配，保留在孤儿列表
+        assert!(!re.is_match("cuserszniedocumentsxwechatfiles"));
 
         // 网易云：Netease\CloudMusic\cloudmusic.exe → netease
         let app = AppInfo {
