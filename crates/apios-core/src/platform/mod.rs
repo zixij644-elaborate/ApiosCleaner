@@ -141,6 +141,8 @@ mod win_registry;
 mod win_trash;
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "windows")]
+mod winget;
 
 /// 当前平台的适配器类型（cfg 编译期选择）
 #[cfg(target_os = "macos")]

@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::{
-    AppDiscovery, AppMetadata, DevEnvPaths, PackageManagers, PluginPaths, ProcessControl,
-    SpotlightIndex, SystemPaths, Trash,
+    AppDiscovery, AppMetadata, DevEnvPaths, PluginPaths, ProcessControl, SpotlightIndex,
+    SystemPaths, Trash,
 };
 use crate::dev_env::DevEnv;
 use crate::model::{AppInfo, Sensitivity};
@@ -243,19 +243,105 @@ fn tasklist_count(image_name: &str) -> u32 {
         .count() as u32
 }
 
+/// Windows 开发环境缓存表（%LOCALAPPDATA%/%APPDATA%/%USERPROFILE% 下可再生缓存，
+/// 现算绝对路径，核心 expand_home 不改）。收紧原则同 macOS：
+/// 只列缓存/registry/下载区，不列工具本体（~\.cargo、~\.m2 根、~\.nuget）、
+/// 配置（AppData\Roaming\npm 等）、用户数据。
+fn dev_envs_table(local: &str, roaming: &str, home: &str) -> Vec<DevEnv> {
+    vec![
+        DevEnv {
+            name: "Android Studio".into(),
+            paths: vec![
+                format!("{local}\\Google\\AndroidStudio*\\.gradle"),
+                format!("{local}\\Google\\AndroidStudio*\\caches"),
+            ],
+        },
+        DevEnv {
+            name: "Cargo".into(),
+            paths: vec![
+                format!("{home}\\.cargo\\git\\"),
+                format!("{home}\\.cargo\\registry\\"),
+            ],
+        },
+        DevEnv {
+            name: "Composer".into(),
+            paths: vec![format!("{local}\\Composer\\cache")],
+        },
+        DevEnv {
+            name: "Deno".into(),
+            paths: vec![format!("{local}\\deno")],
+        },
+        DevEnv {
+            name: "Go Modules".into(),
+            paths: vec![
+                format!("{home}\\go\\pkg\\mod\\"),
+                format!("{local}\\go-build"), // GOCACHE（编译中间产物）
+            ],
+        },
+        DevEnv {
+            name: "Gradle".into(),
+            paths: vec![
+                format!("{home}\\.gradle\\caches\\"),
+                format!("{home}\\.gradle\\wrapper\\"),
+            ],
+        },
+        DevEnv {
+            name: "IntelliJ IDEA".into(),
+            paths: vec![
+                format!("{local}\\JetBrains\\*\\caches"),
+                format!("{local}\\JetBrains\\*\\log"),
+            ],
+        },
+        DevEnv {
+            name: "Maven".into(),
+            paths: vec![format!("{home}\\.m2\\repository\\")],
+        },
+        DevEnv {
+            name: "Npm".into(),
+            paths: vec![
+                format!("{local}\\npm-cache"),
+                format!("{local}\\pnpm-store"),
+                format!("{home}\\.bun\\install\\cache"),
+            ],
+        },
+        DevEnv {
+            name: "Pip".into(),
+            paths: vec![format!("{local}\\pip\\cache")],
+        },
+        DevEnv {
+            name: "Uv".into(),
+            paths: vec![format!("{local}\\uv\\cache")],
+        },
+        DevEnv {
+            name: "VS Code".into(),
+            paths: vec![
+                format!("{roaming}\\Code\\Cache"),
+                format!("{roaming}\\Code\\CachedData"),
+                format!("{roaming}\\Code\\CachedExtensionVSIXs"),
+                format!("{roaming}\\Code\\Code Cache"),
+            ],
+        },
+        DevEnv {
+            name: "Yarn".into(),
+            paths: vec![format!("{local}\\Yarn\\Cache")],
+        },
+    ]
+}
+
 impl DevEnvPaths for WindowsAdapter {
-    /// Windows 开发环境缓存表（M5 落地）；当前返回空
     fn dev_envs(&self) -> Vec<DevEnv> {
-        Vec::new()
+        let mut envs = dev_envs_table(&self.appdata_local, &self.appdata_roaming, &self.home);
+        // 仅保留存在目录（Windows 用户可能一个都不装；保留不存在项只是噪音）
+        envs.retain(|e| {
+            e.paths
+                .iter()
+                .any(|p| p.contains('*') || Path::new(p).is_dir())
+        });
+        envs
     }
 }
 
-impl PackageManagers for WindowsAdapter {
-    /// winget（M5 落地）；当前返回空
-    fn package_managers(&self) -> Vec<Box<dyn super::PackageManager>> {
-        Vec::new()
-    }
-}
+// PackageManagers impl 在 winget.rs（对齐 homebrew.rs：manager 文件持有 impl）
 
 impl AppDiscovery for WindowsAdapter {
     /// 注册表卸载项（主数据源）+ 开始菜单 .lnk（补充便携应用）
@@ -359,4 +445,62 @@ fn walk_lnk(dir: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dev_envs_table_structure() {
+        let envs = dev_envs_table(
+            r"C:\Users\u\AppData\Local",
+            r"C:\Users\u\AppData\Roaming",
+            r"C:\Users\u",
+        );
+        // 13 个环境（与计划一致）
+        assert_eq!(envs.len(), 13);
+        let all: Vec<&str> = envs
+            .iter()
+            .flat_map(|e| e.paths.iter().map(|p| p.as_str()))
+            .collect();
+        // 路径全部落在三个根之下（不允许 ~/Library 式布局泄漏）
+        for p in &all {
+            assert!(
+                p.starts_with(r"C:\Users\u\AppData\Local")
+                    || p.starts_with(r"C:\Users\u\AppData\Roaming")
+                    || p.starts_with(r"C:\Users\u\")
+            );
+            assert!(!p.contains("Library/"), "不得含 macOS 布局: {p}");
+        }
+        // 工具本体根条目不得出现（其下缓存子路径合法）
+        for root in [
+            r"C:\Users\u\.cargo",
+            r"C:\Users\u\.m2",
+            r"C:\Users\u\.nuget",
+            r"C:\Users\u\.gradle",
+            r"C:\Users\u\.conda",
+        ] {
+            assert!(
+                !all.iter().any(|p| p == &root),
+                "路径表不应包含工具本体根目录 {root}"
+            );
+        }
+        // 核心目标必须保留
+        assert!(all.iter().any(|p| p.contains("gradle\\caches")));
+        assert!(all.iter().any(|p| p.contains("JetBrains\\*\\caches")));
+        assert!(all.iter().any(|p| p.contains("npm-cache")));
+        assert!(all.iter().any(|p| p.contains("pip\\cache")));
+        assert!(all.iter().any(|p| p.contains("uv\\cache")));
+        assert!(all.iter().any(|p| p.contains("cargo\\registry")));
+    }
+
+    #[test]
+    fn test_dev_envs_names_unique() {
+        let envs = dev_envs_table("L", "R", "H");
+        let mut names: Vec<&str> = envs.iter().map(|e| e.name.as_str()).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), envs.len());
+    }
 }

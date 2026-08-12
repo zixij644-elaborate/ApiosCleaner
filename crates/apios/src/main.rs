@@ -165,7 +165,21 @@ enum LipoAction {
     },
 }
 
+/// 旧版 Windows 控制台默认代码页（GBK 936 / 437）无法输出 UTF-8 中文 →
+/// 启动时切换到 65001（UTF-8）。kernel32 手写 FFI，零依赖。
+#[cfg(target_os = "windows")]
+fn set_console_utf8() {
+    extern "system" {
+        fn SetConsoleOutputCP(cp: u32) -> i32;
+    }
+    unsafe {
+        SetConsoleOutputCP(65001);
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "windows")]
+    set_console_utf8();
     let cli = Cli::parse();
     match cli.command {
         Command::List { ref app } => cmd_list(&cli, app),
