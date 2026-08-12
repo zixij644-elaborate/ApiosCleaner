@@ -8,8 +8,8 @@ not a straight port: real safety and correctness defects are fixed, the
 architecture is rethought for cross-platform use, and it evolves
 independently — see [Beyond a straight port](CHANGELOG.md#beyond-a-straight-port).
 
-> ⚠️ **Status**: v0.1.0 — first release. macOS adapter works (CLI); Linux/Windows
-> adapters compile with default XDG behavior; the GUI is planned.
+> ⚠️ **Status**: v0.2.0 — macOS and Windows adapters work (CLI); Linux
+> compiles with default XDG behavior; the GUI is planned.
 
 ## Why this project
 
@@ -24,8 +24,9 @@ independently — see [Beyond a straight port](CHANGELOG.md#beyond-a-straight-po
   are pure Rust with no OS API dependency and type-check unchanged on
   non-macOS targets; platform behavior (paths, trash, Spotlight, package
   managers) lives behind per-OS adapters that can be tuned independently
-- **Testability**: 109 unit tests covering scan/match/orphan/trash/lipo/pkg/
-  plugin semantics, with a Linux cross-check CI gate
+- **Testability**: 110+ unit tests covering scan/match/orphan/trash/lipo/pkg/
+  plugin semantics plus Windows-only suites (registry enumeration, Recycle Bin
+  FFI, winget parsing) that run natively on the Windows CI job
 - **Safety first**: all deletions are trash-based (reversible), critical
   system paths are protected against normalization tricks, and every
   destructive command asks for confirmation
@@ -36,8 +37,8 @@ independently — see [Beyond a straight port](CHANGELOG.md#beyond-a-straight-po
 |---|---|
 | Core engine (scan/match/orphan/trash) | ✅ implemented + unit tested |
 | CLI (`list` / `uninstall` / `orphan` / `clean-orphan` / `dev-clean` / `pkg` / `plugins` / `lipo`) | ✅ works on macOS, output verified against the reference implementation |
-| Platform adapters | ⚠️ macOS: paths / app metadata / trash in place; Linux, Windows: ⬜ planned |
-| Verification | ✅ 9/9 and 17/17 file sets identical on test apps |
+| Platform adapters | ✅ macOS: paths / metadata / trash / Spotlight / lipo; ✅ Windows (v0.2.0): registry + Start Menu discovery, Recycle Bin (system API), taskkill, dev-clean, winget; ⬜ Linux: XDG defaults, desktop-file parsing planned |
+| Verification | ✅ 9/9 and 17/17 file sets identical on test apps; ✅ Windows native tests on CI (registry / Recycle Bin / winget parsing) |
 | UI | ⬜ planned |
 
 ## Install
@@ -70,9 +71,14 @@ Or install the CLI directly with cargo:
 cargo install --git git@github.com:Zniece/ApiosCleaner.git --locked
 ```
 
-> ⚠️ Deleting commands move files to the Trash and ask for confirmation; they
-> never permanently delete. Run the binary without `sudo` — the critical-path
-> guard assumes a non-root user.
+**Windows**: download `apios-windows-x86_64` (a zip with `apios.exe`) from the
+latest [CI run](https://github.com/Zniece/ApiosCleaner/actions) → Artifacts, or
+`cargo install` on the machine itself. Requires no admin rights; the Recycle
+Bin API works per-user.
+
+> ⚠️ Deleting commands move files to the Trash (macOS/Linux) or the Recycle Bin
+> (Windows) and ask for confirmation; they never permanently delete. Run the
+> binary without `sudo` — the critical-path guard assumes a non-root user.
 
 ## Usage
 
@@ -135,6 +141,25 @@ apios lipo Firefox
 apios lipo thin Firefox
 apios lipo thin --sign Firefox
 ```
+
+### Windows notes
+
+The `<app>` argument accepts a registry `DisplayName` (e.g. `7-Zip`), the
+installer path, or a `.lnk` path — `bundle_identifier` does not exist on
+Windows, so matching falls back to display-name / path needles.
+
+```sh
+# list / uninstall / orphan work as on macOS (deletion goes to the Recycle Bin)
+
+# Package manager category: winget (no formula/cask distinction)
+apios pkg winget list
+apios pkg winget uninstall 7-Zip
+```
+
+`apios lipo` is macOS-only; on Windows the command is not compiled in. `pkg`
+and `plugins` report no managers/categories (nothing to enumerate). The console
+is switched to UTF-8 (code page 65001) at startup so Chinese output renders
+correctly in legacy cmd/PowerShell consoles.
 
 ## Documentation
 

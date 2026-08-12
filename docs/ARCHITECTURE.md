@@ -25,8 +25,9 @@ flowchart TB
 
         subgraph ADAPTER["platform adapter — trait + cfg(target_os)"]
             direction LR
-            TRAITS["traits<br/><br/>SystemPaths · AppMetadata · Trash<br/>SpotlightIndex · ProcessControl<br/>DevEnvPaths · PackageManagers"]
+            TRAITS["traits<br/><br/>SystemPaths · AppMetadata · Trash<br/>SpotlightIndex · ProcessControl<br/>DevEnvPaths · PackageManagers<br/>PluginPaths · AppDiscovery"]
             MAC["macOS impl<br/><br/>macos.rs · homebrew.rs<br/>lipo.rs — universal-binary thinning<br/>cfg(macos) only: Darwin format"]
+            WIN["Windows impl<br/><br/>windows.rs · win_registry.rs<br/>win_trash.rs · winget.rs<br/>cfg(windows) only: registry / shell API"]
             FB["fallback impl<br/><br/>fallback.rs<br/>XDG defaults"]
         end
     end
@@ -34,6 +35,7 @@ flowchart TB
     CLI --> CORE
     LOGIC -->|"adapter() + trait calls"| TRAITS
     TRAITS -->|"cfg!(target_os = macos)"| MAC
+    TRAITS -->|"cfg!(target_os = windows)"| WIN
     TRAITS -->|"other targets"| FB
 ```
 
@@ -48,33 +50,46 @@ flowchart TB
 
 Every OS-dependent behavior is a trait in `apios-core/src/platform/`:
 
-| Trait | Responsibility | macOS impl | Fallback impl |
-|---|---|---|---|
-| `SystemPaths` | home, caches, temp, app folders | real paths | XDG defaults |
-| `AppMetadata` | entitlements, team identifier | codesign | `None` |
-| `Trash` | trash directory location | `~/.Trash` | XDG trash dir |
-| `SpotlightIndex` | supplemental file lookup | `mdfind` (with timeout) | empty |
-| `ProcessControl` | terminate a running app | AppleScript (`tell application … to quit`) | no-op |
-| `DevEnvPaths` | dev-environment cache tables | macOS table | Linux XDG table |
-| `PackageManagers` | per-manager uninstall/autoremove | Homebrew | none yet |
+| Trait | Responsibility | macOS impl | Windows impl | Fallback impl |
+|---|---|---|---|---|
+| `SystemPaths` | home, caches, temp, app folders | real paths | `USERPROFILE` / `%APPDATA%` / `%LOCALAPPDATA%` family | XDG defaults |
+| `AppMetadata` | entitlements, team identifier | codesign | `None` (registry holds the metadata) | `None` |
+| `Trash` | trash dir + `move_to_trash` action | `~/.Trash`, archive move | `SHFileOperationW` (`FO_DELETE` + `FOF_ALLOWUNDO` → Recycle Bin) | XDG trash dir |
+| `SpotlightIndex` | supplemental file lookup | `mdfind` (with timeout) | empty | empty |
+| `ProcessControl` | terminate a running app | `ps` + `kill -TERM` (bundle-prefix scoped) | `tasklist` + `taskkill /F /T /IM` | no-op |
+| `DevEnvPaths` | dev-environment cache tables | macOS table | `%LOCALAPPDATA%`/`%APPDATA%` table (13 envs) | Linux XDG table |
+| `PackageManagers` | per-manager uninstall/autoremove | Homebrew | winget | none yet |
+| `PluginPaths` | plugin category table | 18 macOS categories | empty | empty |
+| `AppDiscovery` | installed-app enumeration | `.app` walk (scan.rs) | registry uninstall entries + Start Menu `.lnk` | `.app` walk (scan.rs) |
 
 `platform/mod.rs` exposes a `pub type Adapter` chosen by `cfg(target_os)`
-(`macos::MacOsAdapter` on macOS, `fallback::FallbackAdapter` elsewhere), and a
-global `adapter()` accessor. Engine code calls `crate::platform::adapter()`
-with the trait in scope — the logic never branches on the OS itself, so a new
-platform only needs new trait implementations, not changes to the engine.
+(`macos::MacOsAdapter` on macOS, `windows::WindowsAdapter` on Windows,
+`fallback::FallbackAdapter` elsewhere), and a global `adapter()` accessor.
+Engine code calls `crate::platform::adapter()` with the trait in scope — the
+logic never branches on the OS itself, so a new platform only needs new trait
+implementations, not changes to the engine.
 
 The macOS implementation is further split:
 - `platform/macos.rs` — paths, Spotlight (`mdfind`), process control
-  (`osascript`), `getconf`
+  (`ps`/`kill`), `getconf`
 - `platform/homebrew.rs` — the brew CLI wrapper (dependent checks, `--zap`,
   error triage)
+
+The Windows implementation is hand-written FFI only (zero third-party deps):
+- `platform/windows.rs` — `WindowsAdapter` (paths, discovery, trash, taskkill,
+  dev-env table)
+- `platform/win_registry.rs` — `Reg*W` enumeration of HKLM/HKCU uninstall
+  entries (pure parser separated from the FFI shell)
+- `platform/win_trash.rs` — `SHFileOperationW` Recycle Bin calls (batch +
+  per-file failure classification)
+- `platform/winget.rs` — the winget CLI wrapper (all packages map to
+  `Formula`; no dependents/autoremove concept)
 
 ## Engine modules
 
 | Module | Purpose |
 |---|---|
-| `scan.rs` | Enumerate installed apps (bundle-identifier reading, symlink-safe dedup, `com.alienator88.Pearcleaner` self-exclusion) |
+| `scan.rs` | Enumerate installed apps (bundle-identifier reading, symlink-safe dedup, `com.alienator88.Pearcleaner` self-exclusion; macOS/fallback discovery delegates here) |
 | `search.rs` | Find all related files of an app: directory walk with depth rules, vendor-directory fallback, name matching, outliers, final set dedup |
 | `matcher.rs` / `conditions.rs` | Should-skip rules and per-app specific conditions (bundle-id exact matching, include/exclude force lists) |
 | `orphan.rs` | Detect files left behind by uninstalled apps (prebuilt UUID→bundle-id map) |
@@ -95,9 +110,16 @@ Three layers protect against destructive mistakes:
    `/etc`, `/var`, `/private`, `/opt`, `/Users`, `/Users/Shared`, home,
    `~/Applications`). Sub-paths under those roots (e.g. `~/Library/Preferences/…`)
    remain legal delete targets.
+   On Windows the drive prefix is **preserved** during normalization (a
+   `C:\Windows` that collapsed to `/Windows` would bypass the POSIX table —
+   fixed), and the critical list is env-driven: `SystemRoot`, `ProgramFiles`,
+   `ProgramFiles(x86)`, `ProgramData`, the profile root, plus a format check
+   that blocks any bare drive root (`X:\`).
 2. **Reversible deletion**: files are *moved* into a timestamped archive
    folder inside the Trash (`<Name>_<yyyy-MM-dd_HH-mm-ss>`), never removed.
-   `restore_files` moves them back.
+   `restore_files` moves them back. On Windows the same guarantee comes from
+   the OS: `SHFileOperationW` with `FOF_ALLOWUNDO` sends files to the Recycle
+   Bin (no archive folder, so restore is up to the user via the system UI).
 3. **Confirmation**: every destructive command prints what it will do and asks
    `y/N` (default no). `-y` skips the prompt for scripting; a rejection aborts
    with `Aborted — nothing was deleted.` and exit 0.
@@ -106,8 +128,13 @@ Three layers protect against destructive mistakes:
 
 - **Unit tests in-module** cover the pure logic with fixture bytes/strings and
   `tempfile` temp trees — no live system state needed.
-- **Linux cross-check** (`cargo check --target x86_64-unknown-linux-gnu` in CI)
-  keeps the core truly portable: anything that only compiles on macOS is
-  confined to the adapter layer.
+- **Linux + Windows cross-check** (`cargo check --target
+  x86_64-unknown-linux-gnu` and `--target x86_64-pc-windows-gnu` in CI) keeps
+  the core truly portable: anything that only compiles on macOS is confined to
+  the adapter layer.
+- **Windows native job** runs the full suite plus Windows-only integration
+  tests on `windows-latest`: a temporary HKCU uninstall key is created,
+  enumerated, and deleted; a temp file is moved to the Recycle Bin via
+  `SHFileOperationW`; `winget list` output is parsed from fixtures.
 - **Live regression** on macOS compares output against the reference
   implementation (9/9 and 17/17 identical file sets on test apps).
