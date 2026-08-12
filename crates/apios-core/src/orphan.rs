@@ -341,15 +341,18 @@ impl ReversePathsSearcher {
                 "whesvc",
                 "ssh",
             ];
-            // Program Files(+x86) 根下的 OS 组件目录（fix A 加入 reverse_paths
-            // 后实测整段误报）：名称以 "Windows" 开头的（Windows Defender/NT/
+            // 系统/结构目录过滤（AppData 系统目录名单 + Program Files(+x86)
+            // 根下的 OS 组件目录）：validate_path 只拦 critical 根（AppData/
+            // Program Files 本身），子目录全放行 —— clean-orphan 会真删它们，
+            // 必须在此过滤。名字语义稳定，与父目录无关，跨位置生效（安全方向）。
+            // AppData 名单来自实测（Packages=UWP、Temp、VirtualStore、
+            // ConnectedDevicesPlatform 等每台系统必有且永不被应用引用）；
+            // Program Files 侧：名称以 "Windows" 开头的（Windows Defender/NT/
             // Media Player/WindowsApps/Windows Kits…）或已知共享/系统目录
-            // （Common Files/MSBuild/…）。validate_path 只拦 critical 根
-            // （Program Files 本身），子目录全放行 —— clean-orphan 会真删
-            // 它们，必须在此过滤。名字语义稳定，与父目录无关，AppData 下
-            // 的同名条目同样跳过（安全方向）。
+            // （Common Files/MSBuild/…）。
             let name_lower = scanned_item_name.to_ascii_lowercase();
-            if name_lower.starts_with("windows")
+            if WINDOWS_SYSTEM_DIRS.contains(&name_lower.as_str())
+                || name_lower.starts_with("windows")
                 || matches!(
                     name_lower.as_str(),
                     "common files"
@@ -670,6 +673,22 @@ mod tests {
             "Reference Assemblies",
             "Windows Kits",
             "Windows App Certification Kit",
+            // AppData 系统目录名单（每台系统必有，永不被应用引用）
+            "Packages",
+            "Programs",
+            "Temp",
+            "VirtualStore",
+            "ConnectedDevicesPlatform",
+            "PeerDistRepub",
+            "Publishers",
+            "speech",
+            "Comms",
+            "Upgrade",
+            "PlaceholderTileLogoFolder",
+            "USOPrivate",
+            "USOShared",
+            "Whesvc",
+            "ssh",
         ] {
             searcher.process_item(name, &base.join(name));
         }
