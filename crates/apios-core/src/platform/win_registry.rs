@@ -18,6 +18,10 @@ const REG_SZ: u32 = 1;
 const REG_EXPAND_SZ: u32 = 2;
 
 const UNINSTALL_SUBKEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+/// 32 位应用注册视图（64 位 Windows 上 32 位安装器的卸载项在
+/// WOW6432Node 下，不在默认 64 位视图 —— 漏掉它等于全部 32 位应用缺失）
+const UNINSTALL_SUBKEY_WOW64: &str =
+    "Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
 
 #[link(name = "advapi32")]
 extern "system" {
@@ -178,10 +182,11 @@ fn read_value(key: isize, name: &str) -> Option<(u32, Vec<u8>)> {
     Some((ty, data))
 }
 
-/// 枚举一个 hive 下的全部卸载项（hive: HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER）
-pub fn enum_uninstall(hive: isize) -> Vec<UninstallEntry> {
+/// 枚举一个 hive 下的全部卸载项（hive: HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER；
+/// subkey: 64 位视图或 WOW6432Node）
+fn enum_uninstall_at(hive: isize, subkey: &str) -> Vec<UninstallEntry> {
     let mut root: isize = 0;
-    let subkey = widen(UNINSTALL_SUBKEY);
+    let subkey = widen(subkey);
     let rc = unsafe { RegOpenKeyExW(hive, subkey.as_ptr(), 0, KEY_READ, &mut root) };
     if rc != 0 {
         return Vec::new(); // 权限失败 → 空（不 panic）
@@ -241,10 +246,12 @@ pub fn enum_uninstall(hive: isize) -> Vec<UninstallEntry> {
     out
 }
 
-/// 两个 hive 的合并枚举（HKLM 后 HKCU；重复显示名由调用方处理）
+/// 三个视图的合并枚举（HKLM 64 位 → WOW6432Node（32 位）→ HKCU；
+/// 重复显示名由调用方处理）
 pub fn all_uninstall_entries() -> Vec<UninstallEntry> {
-    let mut out = enum_uninstall(HKEY_LOCAL_MACHINE);
-    out.extend(enum_uninstall(HKEY_CURRENT_USER));
+    let mut out = enum_uninstall_at(HKEY_LOCAL_MACHINE, UNINSTALL_SUBKEY);
+    out.extend(enum_uninstall_at(HKEY_LOCAL_MACHINE, UNINSTALL_SUBKEY_WOW64));
+    out.extend(enum_uninstall_at(HKEY_CURRENT_USER, UNINSTALL_SUBKEY));
     out
 }
 
@@ -358,7 +365,7 @@ mod tests {
         };
         unsafe { RegCloseKey(key) };
 
-        let entries = enum_uninstall(HKEY_CURRENT_USER);
+        let entries = enum_uninstall_at(HKEY_CURRENT_USER, UNINSTALL_SUBKEY);
         assert!(
             entries
                 .iter()
