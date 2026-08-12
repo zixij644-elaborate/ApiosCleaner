@@ -98,6 +98,15 @@ fn needle_qualifies(s: &str) -> bool {
     }
 }
 
+/// path 派生 needle 门槛：≥3 字符（ASCII/非 ASCII 一致）。全串 needle 的
+/// ≥5 门槛是为防 "win"/"sys" 类短词全局误配；path 派生 needle 来自真实
+/// 应用可执行文件位置（父目录名/文件名），3 字符已足够特异。多匹配只造成
+/// 漏报（安全方向）—— 宁可漏报，也不让已装应用目录进孤儿列表。
+#[cfg(windows)]
+fn path_needle_qualifies(s: &str) -> bool {
+    s.chars().count() >= 3
+}
+
 impl ReversePathsSearcher {
     pub fn new(locations: Locations, sorted_apps: Vec<AppInfo>) -> ReversePathsSearcher {
         let home = crate::platform::adapter().home();
@@ -115,6 +124,36 @@ impl ReversePathsSearcher {
             let app_name = pear_format(&app.app_name);
             if needle_qualifies(&app_name) {
                 needles.push(app_name);
+            }
+            #[cfg(windows)]
+            {
+                // Windows 无 bundle id 兜底，且 DisplayName 常含版本号
+                // （"7-Zip 24.09 (x64)"）匹配不上供应商目录名（"7-Zip"）——
+                // 已装应用的 Program Files/AppData 目录会整段误报为孤儿。
+                // 从可执行文件路径派生 needle：父目录名 + 文件 stem
+                // （QQ.exe→Tencent、WeChat.exe→wechat、Code.exe→code）。
+                // 开始菜单 .lnk 的父目录（"Programs"）是结构目录，跳过
+                // （否则成为全路径宽匹配，误杀真实残留）。
+                let dir = app
+                    .path
+                    .parent()
+                    .and_then(|d| d.file_name())
+                    .map(|n| pear_format(&n.to_string_lossy()));
+                if let Some(d) =
+                    dir.filter(|d| d != "programs" && d != "programsx86" && d != "startmenu")
+                {
+                    if path_needle_qualifies(&d) {
+                        needles.push(d);
+                    }
+                }
+                if let Some(stem) = app
+                    .path
+                    .file_stem()
+                    .map(|n| pear_format(&n.to_string_lossy()))
+                    .filter(|s| path_needle_qualifies(s))
+                {
+                    needles.push(stem);
+                }
             }
             for ent in app.entitlements.iter().filter_map(|e| {
                 let f = pear_format(e);
@@ -279,7 +318,26 @@ impl ReversePathsSearcher {
                 "whesvc",
                 "ssh",
             ];
-            if WINDOWS_SYSTEM_DIRS.contains(&scanned_item_name.to_ascii_lowercase().as_str()) {
+            // Program Files(+x86) 根下的 OS 组件目录（fix A 加入 reverse_paths
+            // 后实测整段误报）：名称以 "Windows" 开头的（Windows Defender/NT/
+            // Media Player/WindowsApps/Windows Kits…）或已知共享/系统目录
+            // （Common Files/MSBuild/…）。validate_path 只拦 critical 根
+            // （Program Files 本身），子目录全放行 —— clean-orphan 会真删
+            // 它们，必须在此过滤。名字语义稳定，与父目录无关，AppData 下
+            // 的同名条目同样跳过（安全方向）。
+            let name_lower = scanned_item_name.to_ascii_lowercase();
+            if name_lower.starts_with("windows")
+                || matches!(
+                    name_lower.as_str(),
+                    "common files"
+                        | "internet explorer"
+                        | "msbuild"
+                        | "reference assemblies"
+                        | "wsl"
+                        | "modifiablewindowsapps"
+                        | "application verifier"
+                )
+            {
                 return;
             }
         }
@@ -414,6 +472,127 @@ mod tests {
         assert!(re.is_match("usersulibrarycontainerscomtencentwechat"));
         assert!(re.is_match("usersulibraryapplicationsupportwechat"));
         assert!(!re.is_match("usersulibraryapplicationsupportother"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_path_derived_dir_needle() {
+        // 中文 DisplayName（夸克网盘）匹配不上英文目录名（QuarkCloudDrive）：
+        // path 派生的父目录 needle 兜底。7-Zip 同理（DisplayName 含版本号）
+        let app = AppInfo {
+            path: PathBuf::from(r"C:\Program Files\QuarkCloudDrive\QuarkCloudDrive.exe"),
+            bundle_identifier: String::new(),
+            app_name: "夸克网盘".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+        let locations = Locations::new();
+        let searcher = ReversePathsSearcher::new(locations, vec![app]);
+        let re = searcher.needles_regex.as_ref().expect("应构建合并正则");
+        assert!(re.is_match("cprogramfilesquarkclouddrive"));
+        assert!(re.is_match("cprogramdataquarkclouddrive"));
+
+        let app = AppInfo {
+            path: PathBuf::from(r"C:\Program Files\7-Zip\7zFM.exe"),
+            bundle_identifier: String::new(),
+            app_name: "7-Zip 24.09 (x64)".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+        let locations = Locations::new();
+        let searcher = ReversePathsSearcher::new(locations, vec![app]);
+        assert!(searcher
+            .needles_regex
+            .as_ref()
+            .unwrap()
+            .is_match("cprogramfiles7zip"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_path_derived_stem_needle() {
+        // Code.exe → "code"（4 字符，path 门槛 ≥3 放行；全串门槛不放行）
+        let app = AppInfo {
+            path: PathBuf::from(r"C:\Users\u\AppData\Local\Programs\Microsoft VS Code\Code.exe"),
+            bundle_identifier: String::new(),
+            app_name: "Visual Studio Code".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+        let locations = Locations::new();
+        let searcher = ReversePathsSearcher::new(locations, vec![app]);
+        let re = searcher.needles_regex.as_ref().expect("应构建合并正则");
+        assert!(re.is_match("cusersuappdataroamingcode"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_lnk_programs_dir_not_a_needle() {
+        // 开始菜单 .lnk 的父目录 Programs 是结构目录，不得成为 needle
+        // （否则全路径宽匹配）。app_name（微信）仍正常生效
+        let app = AppInfo {
+            path: PathBuf::from(
+                r"C:\Users\u\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\微信.lnk",
+            ),
+            bundle_identifier: String::new(),
+            app_name: "微信".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+        let locations = Locations::new();
+        let searcher = ReversePathsSearcher::new(locations, vec![app]);
+        let re = searcher.needles_regex.as_ref().expect("应构建合并正则");
+        // 中文 app_name needle 只匹配含中文的路径（lnk 文件本身、微信目录）
+        assert!(re.is_match("cusersuappdataroamingmicrosoftwindowsstartmenuprograms微信lnk"));
+        // 若 "programs" 成了 needle，此 ASCII 路径会命中 —— 必须不命中
+        assert!(!re.is_match("cusersuappdatalocalprogramsfoo"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_windows_system_dirs_filtered_from_orphans() {
+        let locations = Locations::new();
+        let mut searcher = ReversePathsSearcher::new(locations, vec![]);
+        let base = std::env::temp_dir().join("apios-orphan-sysdir-test");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        // 名单内条目：目录名命中即过滤（文件/目录不存在也不影响 —— 过滤先于存在检查）
+        for name in [
+            "Windows NT",
+            "WindowsApps",
+            "Common Files",
+            "MSBuild",
+            "Internet Explorer",
+            "WSL",
+            "Application Verifier",
+            "Reference Assemblies",
+            "Windows Kits",
+            "Windows App Certification Kit",
+        ] {
+            searcher.process_item(name, &base.join(name));
+        }
+        // 普通供应商目录（已存在）：不是系统目录 → 进列表
+        let vendor = base.join("QuarkCloudDrive");
+        std::fs::create_dir_all(&vendor).unwrap();
+        searcher.process_item("QuarkCloudDrive", &vendor);
+        assert_eq!(
+            searcher.collection.len(),
+            1,
+            "系统目录必须被过滤，供应商目录保留"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
