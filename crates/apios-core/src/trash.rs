@@ -95,10 +95,11 @@ pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult
 
     let trash = crate::platform::adapter().trash_dir();
 
-    // 归档目录名（UndoManager.swift:85-104）
+    // 归档目录名（UndoManager.swift:85-104）。
+    // 防御：应用名可能含 "/"（嵌套路径），替换为 "_" 避免破坏归档目录结构
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let folder_name = match bundle_name.filter(|n| !n.is_empty()) {
-        Some(name) => name.to_string(),
+        Some(name) => name.replace(['/', ':'], "_"),
         None => valid
             .first()
             .and_then(|f| f.file_stem().map(|s| s.to_string_lossy().to_string()))

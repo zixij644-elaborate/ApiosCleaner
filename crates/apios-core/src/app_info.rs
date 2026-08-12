@@ -6,9 +6,18 @@
 //! 本模块保留公共函数签名（核心/CLI 零改动）。
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use crate::model::AppInfo;
 use crate::platform::AppMetadata;
+
+/// 容器 UUID 目录名（AppPathsFetch.swift:148-150 的 UUID 正则）
+static CONTAINER_UUID_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$",
+    )
+    .unwrap()
+});
 
 /// 从应用 bundle 路径构建 AppInfo（PoC：直接解析 Info.plist，不用 Bundle 缓存）
 pub fn get_app_info(path: &Path) -> Option<AppInfo> {
@@ -51,7 +60,10 @@ pub fn get_app_info(path: &Path) -> Option<AppInfo> {
             .is_some_and(|e| e == "app_mode_loader");
 
     let entitlements = get_entitlements(path);
-    let team_identifier = get_team_identifier(path);
+    // team_identifier 仅 Deep 敏感度匹配使用（GUI 功能）；孤儿扫描与 CLI（strict）
+    // 都不需要 → 省略 codesign 调用（每个 app 省一次外部进程，孤儿扫描的主要开销）。
+    // GUI deep 阶段再启用 get_team_identifier。
+    let team_identifier: Option<String> = None;
 
     Some(AppInfo {
         path: path.to_path_buf(),
@@ -85,16 +97,12 @@ pub fn get_team_identifier(app_path: &Path) -> Option<String> {
 /// 容器元数据解析（AppPathsFetch.swift:143-183）：
 /// 扫描 ~/Library/Containers/<UUID>/.com.apple.containermanagerd.metadata.plist
 pub fn get_app_containers(home: &str, bundle_identifier: &str) -> Vec<PathBuf> {
-    let uuid_regex = regex::Regex::new(
-        r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$",
-    )
-    .unwrap();
     let containers_path = PathBuf::from(format!("{home}/Library/Containers"));
     let mut containers = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&containers_path) {
         for entry in entries.flatten() {
             let dir_name = entry.file_name().to_string_lossy().to_string();
-            if !uuid_regex.is_match(&dir_name) {
+            if !CONTAINER_UUID_REGEX.is_match(&dir_name) {
                 continue;
             }
             let metadata = entry.path().join(".com.apple.containermanagerd.metadata.plist");

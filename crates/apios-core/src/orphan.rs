@@ -3,11 +3,17 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use crate::conditions;
 use crate::format::pear_format;
 use crate::locations::Locations;
-use crate::model::AppInfo;
+use crate::model::{AppInfo, Condition};
+
+/// UUID 容器目录名（ReversePathsFetch.swift:280-285 的 containerNameByUUID 正则）
+static UUID_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$").unwrap()
+});
 
 /// 预计算的已安装应用标识（ReversePathsFetch.swift:30-47）
 #[derive(Clone)]
@@ -22,6 +28,8 @@ pub struct ReversePathsSearcher {
     collection: Vec<PathBuf>,
     cached_apps: Vec<CachedAppIdentifiers>,
     skip_reverse: HashSet<String>,
+    /// 条件表缓存（new() 时构建一次；cond() 构建含磁盘 exists 检查，不能每路径重建）
+    conditions: Vec<Condition>,
 }
 
 /// isSupportedFileType（AlinFoundation）：普通文件 / 目录 / 符号链接
@@ -37,11 +45,7 @@ fn is_supported_file_type(path: &Path) -> bool {
 /// 容器目录 → bundle ID（Utilities.swift:547-595 的 containerNameByUUID）
 fn container_name_by_uuid(path: &Path, home: &str) -> Option<String> {
     let uuid = path.file_name()?.to_string_lossy().to_string();
-    let uuid_regex = regex::Regex::new(
-        r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$",
-    )
-    .unwrap();
-    if !uuid_regex.is_match(&uuid) {
+    if !UUID_REGEX.is_match(&uuid) {
         return None;
     }
     let containers = PathBuf::from(format!("{home}/Library/Containers"));
@@ -91,14 +95,16 @@ impl ReversePathsSearcher {
             collection: Vec::new(),
             cached_apps,
             skip_reverse: conditions::skip_reverse(),
+            conditions: conditions::conditions(),
         }
     }
 
     /// 是否与已安装应用相关（ReversePathsFetch.swift:227-255）
     fn is_related_to_installed_app(&self, path: &Path, normalized_path: &str) -> bool {
         let home = std::env::var("HOME").unwrap_or_default();
-        // 容器匹配只对 /Containers/ 路径生效
-        let container_name = if normalized_path.contains("/containers/") {
+        // 容器匹配只对 /Containers/ 路径生效（原版用原始路径判断，
+        // 不能用 pearFormat 后的路径——斜杠已被剥除）
+        let container_name = if path.to_string_lossy().contains("/Containers/") {
             container_name_by_uuid(path, &home).map(|b| pear_format(&b))
         } else {
             None
@@ -139,7 +145,7 @@ impl ReversePathsSearcher {
 
     /// 条件排除（ReversePathsFetch.swift:257-278）
     fn is_excluded_by_conditions(&self, normalized_path: &str) -> bool {
-        for condition in conditions::conditions() {
+        for condition in &self.conditions {
             // 仅当条件对应的 app 已安装才生效
             let installed = self
                 .cached_apps
