@@ -1,5 +1,7 @@
 # Security Policy
 
+[中文版](docs/zh-CN/SECURITY.zh-CN.md)
+
 ## Reporting a vulnerability
 
 Please **do not** open a public issue for security vulnerabilities. Report
@@ -29,7 +31,7 @@ path handling have real destructive potential. Issues of particular interest:
 
 | Version | Supported |
 |---|---|
-| latest release (v0.1.x) | ✅ |
+| latest release (v0.2.x) | ✅ |
 | earlier releases | ❌ |
 
 Only the latest release receives security fixes.

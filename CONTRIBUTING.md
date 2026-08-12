@@ -1,5 +1,7 @@
 # Contributing to ApiosCleaner
 
+[中文版](docs/zh-CN/CONTRIBUTING.zh-CN.md)
+
 Thanks for considering a contribution! This project is a cross-platform app
 cleaner with a portable Rust core and a per-OS adapter layer. Please read
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) first to understand the layering
