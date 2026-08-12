@@ -12,7 +12,7 @@ use crate::identifiers::CachedIdentifiers;
 use crate::locations::{standard_library_subdirectories, Locations};
 use crate::matcher::{should_skip_item, specific_condition};
 use crate::model::{AppInfo, Condition, Sensitivity, SkipCondition};
-use crate::platform::SpotlightIndex;
+use crate::platform::{SpotlightIndex, SystemPaths};
 
 pub struct AppPathFinder<'a> {
     pub app: &'a AppInfo,
@@ -84,13 +84,13 @@ impl<'a> AppPathFinder<'a> {
     /// 原版 group container 用 FileManager.containerURL(forSecurityApplicationGroupIdentifier:)
     /// （ObjC API，以目标 app 的 bundle ID 调用，绝大多数返回 nil）—— PoC 先跳过，只做 UUID 容器扫描。
     fn get_all_containers(&self) -> Vec<PathBuf> {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::platform::adapter().home();
         app_info::get_app_containers(&home, &self.app.bundle_identifier)
     }
 
     /// 判断位置是否为 Library 根（深度 2 搜索 + skipDeepSearch 生效范围）
     fn is_library_directory(location: &str) -> bool {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::platform::adapter().home();
         location == format!("{home}/Library") || location == "/Library"
     }
 

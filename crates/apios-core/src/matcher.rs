@@ -231,6 +231,7 @@ mod tests {
     use crate::conditions;
     use crate::identifiers::CachedIdentifiers;
     use crate::model::{AppInfo, Condition};
+    use crate::platform::SystemPaths;
     use std::path::PathBuf;
 
     fn make_app(bundle_id: &str, name: &str) -> (AppInfo, CachedIdentifiers) {
@@ -387,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_should_skip_trash() {
-        let home = std::env::var("HOME").unwrap();
+        let home = crate::platform::adapter().home();
         let collection = HashSet::new();
         let skip = conditions::skip_conditions();
         // ~/.Trash 下的任何路径都跳过

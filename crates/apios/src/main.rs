@@ -159,8 +159,15 @@ fn main() {
 /// 参数是路径形式（含目录分隔或带 .app 后缀）？
 /// 注意：不含 `Path::exists()` —— 裸名（如 "Firefox"）若碰巧在 cwd 有同名文件会被劫持
 /// 成路径，绕过应用名查找。裸名一律走 `find_app_by_name`。
+/// Windows：反斜杠分隔与盘符（`C:\...`，限定 `X:` 形态避免误伤含 ':' 的 POSIX 名）。
 fn arg_is_path(arg: &str) -> bool {
-    arg.contains('/') || arg.to_ascii_lowercase().ends_with(".app")
+    let b = arg.as_bytes();
+    // 盘符形态：`C:` 或 `C:\...`（首字符字母 + 冒号 + 反斜杠/结尾）
+    let drive = b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b.len() == 2 || b[2] == b'\\');
+    arg.contains('/') || arg.contains('\\') || drive || arg.to_ascii_lowercase().ends_with(".app")
 }
 
 /// 在默认应用目录中按名称查找 <name>.app（先精确匹配，再大小写不敏感）
@@ -1068,12 +1075,17 @@ mod tests {
         assert!(arg_is_path("~/Downloads/Foo.app"));
         assert!(!arg_is_path("Foo"));
         assert!(!arg_is_path("Microsoft Edge"));
+        // Windows 形态（跨平台断言：POSIX 上同样判定为路径，无副作用）
+        assert!(arg_is_path(r"C:\Users\foo\Foo.exe"));
+        assert!(arg_is_path(r".\Foo.exe"));
+        assert!(arg_is_path("C:\\Program Files\\Foo"));
+        assert!(!arg_is_path("C:colon-name")); // 非盘符形态（首字符后不是 :）
     }
 
     #[test]
     fn test_find_app_by_name_not_found() {
         // 不可能存在的应用名 → None
-        let folders = default_app_folders(&std::env::var("HOME").unwrap_or_default());
+        let folders = default_app_folders(&apios_core::platform::adapter().home());
         assert!(find_app_by_name("nonexistent-app-zzz-xyz", &folders).is_none());
     }
 

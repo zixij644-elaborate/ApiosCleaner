@@ -74,10 +74,11 @@ fn walk_apps(folder: &Path) -> Vec<AppInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::SystemPaths;
 
     #[test]
     fn test_default_folders() {
-        let home = std::env::var("HOME").unwrap();
+        let home = crate::platform::adapter().home();
         let folders = default_app_folders(&home);
         assert_eq!(folders.len(), 3);
         assert!(folders[1].ends_with("/Applications"));

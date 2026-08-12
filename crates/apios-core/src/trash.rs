@@ -11,18 +11,29 @@ use std::path::{Path, PathBuf};
 
 use chrono::Local;
 
-use crate::platform::Trash;
+use crate::platform::{SystemPaths, Trash};
 
 /// isWritableFile 移植（CLI.swift uninstall-all/remove-orphaned 的受保护文件检测）：
 /// POSIX rename 语义 —— 需要的是**父目录**可写，而非条目自身（条目只读不影响 mv）。
 /// 原版 FileManager.isWritableFile 测条目本身 → 只读文件被误报为受保护。
 /// root 恒可写 → sudo 下不触发受保护分支。
+///
+/// Windows：恒 true（注册表卸载的应用通常可写；只读属性不阻 SHFileOperation 移动；
+/// 真正的阻断是文件占用 sharing violation，走 failed 列表 + taskkill 提示）。
 pub fn is_writable(path: &Path) -> bool {
-    let parent = path.parent().unwrap_or_else(|| Path::new("/"));
-    let Ok(c_path) = std::ffi::CString::new(parent.to_string_lossy().as_bytes()) else {
-        return false;
-    };
-    unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 }
+    #[cfg(not(windows))]
+    {
+        let parent = path.parent().unwrap_or_else(|| Path::new("/"));
+        let Ok(c_path) = std::ffi::CString::new(parent.to_string_lossy().as_bytes()) else {
+            return false;
+        };
+        unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        let _ = path;
+        true
+    }
 }
 
 /// 文件对：回收站位置 ↔ 原位置（撤销用）
@@ -45,32 +56,43 @@ pub struct DeleteResult {
 /// 词法归一化绝对路径：折叠 `.`/`..`、合并重复分隔符、去掉尾部斜杠。
 /// `..` 越界收缩到根（`/Users/../Library` → `/Library`）。
 /// 相对路径（不以 / 开头）返回 None —— 删除列表必须是绝对路径，相对路径说明上游有 bug。
-/// 注：按 POSIX 分隔符处理；Windows 盘符（Prefix 组件）不参与 critical 匹配，方向安全。
+///
+/// Windows：保留盘符 Prefix（`C:\Windows` → `C:\Windows`，此前 Prefix 被丢弃会归一化
+/// 成 `/Windows` 而绕过 critical 表 —— 安全高危）。POSIX 路径无 Prefix 组件，
+/// 分支与旧逻辑逐字节一致。
 fn normalize_absolute(path: &str) -> Option<String> {
     use std::path::Component;
     let mut parts: Vec<String> = Vec::new();
     let mut absolute = false;
+    let mut prefix: Option<String> = None;
     for comp in Path::new(path).components() {
         match comp {
+            Component::Prefix(p) => prefix = Some(p.as_os_str().to_string_lossy().into_owned()),
             Component::RootDir => {
                 absolute = true;
-                parts.clear();
+                // 仅 POSIX 根清空（旧逻辑）；Windows 盘符后紧跟的 RootDir 不清空
+                if prefix.is_none() {
+                    parts.clear();
+                }
             }
             Component::CurDir => {}
             Component::ParentDir => {
+                // 空栈 pop 无害（`C:\..\x` → `C:\x`，语义正确）
                 parts.pop();
             }
             Component::Normal(n) => parts.push(n.to_string_lossy().into_owned()),
-            Component::Prefix(_) => {}
         }
     }
     if !absolute {
         return None;
     }
-    if parts.is_empty() {
-        return Some("/".to_string());
+    if let Some(p) = prefix {
+        Some(format!("{p}\\{}", parts.join("\\")))
+    } else if parts.is_empty() {
+        Some("/".to_string())
+    } else {
+        Some(format!("/{}", parts.join("/")))
     }
-    Some(format!("/{}", parts.join("/")))
 }
 
 /// 路径安全校验（UndoManager.swift:24-60）。
@@ -81,26 +103,48 @@ pub fn validate_path(path: &str) -> bool {
     let Some(normalized) = normalize_absolute(path) else {
         return false;
     };
-    let home = std::env::var("HOME").unwrap_or_default();
-    let critical: &[&str] = &[
-        "/Applications",
-        "/Library",
-        "/System",
-        "/usr",
-        "/bin",
-        "/sbin",
-        "/etc",
-        "/var",
-        "/private",
-        "/opt",
-        "/Users",
-        "/Users/Shared",
-    ];
-    if normalized == "/" || critical.contains(&normalized.as_str()) || normalized == home {
-        return false;
+    let home = crate::platform::adapter().home();
+    #[cfg(windows)]
+    {
+        // Windows critical 表：环境变量驱动（防非 C: 系统），盘符根用格式检测兜底。
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
+        let program_files =
+            std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".into());
+        let program_files_x86 =
+            std::env::var("ProgramFiles(x86)").unwrap_or_else(|_| "C:\\Program Files (x86)".into());
+        let program_data =
+            std::env::var("ProgramData").unwrap_or_else(|_| "C:\\ProgramData".into());
+        let critical = [system_root, program_files, program_files_x86, program_data];
+        let drive_root = normalized.len() == 3
+            && normalized.as_bytes()[1] == b':'
+            && normalized.as_bytes()[2] == b'\\';
+        if drive_root || critical.contains(&normalized) || normalized == home {
+            return false;
+        }
+        true
     }
-    let home_apps = format!("{home}/Applications");
-    normalized != home_apps
+    #[cfg(not(windows))]
+    {
+        let critical: &[&str] = &[
+            "/Applications",
+            "/Library",
+            "/System",
+            "/usr",
+            "/bin",
+            "/sbin",
+            "/etc",
+            "/var",
+            "/private",
+            "/opt",
+            "/Users",
+            "/Users/Shared",
+        ];
+        if normalized == "/" || critical.contains(&normalized.as_str()) || normalized == home {
+            return false;
+        }
+        let home_apps = format!("{home}/Applications");
+        normalized != home_apps
+    }
 }
 
 /// 删除文件到回收站归档目录（CLI 版 deleteFiles，UndoManager.swift:62-174）
@@ -136,7 +180,7 @@ pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult
     // 防御：应用名可能含 "/"（嵌套路径），替换为 "_" 避免破坏归档目录结构
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let folder_name = match bundle_name.filter(|n| !n.is_empty()) {
-        Some(name) => name.replace(['/', ':'], "_"),
+        Some(name) => name.replace(['/', ':', '\\', '<', '>', '"', '|', '?', '*'], "_"),
         None => valid
             .first()
             .and_then(|f| f.file_stem().map(|s| s.to_string_lossy().to_string()))
@@ -256,7 +300,7 @@ mod tests {
         assert!(!validate_path("/Applications"));
         // 子路径（如 /usr/local）放行 —— 是合法删除目标
         assert!(validate_path("/usr/local"));
-        let home = std::env::var("HOME").unwrap();
+        let home = crate::platform::adapter().home();
         assert!(!validate_path(&home));
         assert!(!validate_path(&format!("{home}/Applications")));
         assert!(validate_path(&format!(
@@ -285,6 +329,24 @@ mod tests {
         assert!(validate_path("/tmp/foo/../bar"));
     }
 
+    /// Windows critical 表：盘符保留 + 盘符根/系统目录拦截（回归门禁：安全高危修复）
+    #[cfg(windows)]
+    #[test]
+    fn test_validate_path_windows() {
+        assert!(!validate_path("C:\\Windows"));
+        assert!(!validate_path("C:\\Program Files"));
+        assert!(!validate_path("C:\\Program Files (x86)"));
+        assert!(!validate_path("C:\\ProgramData"));
+        assert!(!validate_path("C:\\")); // 盘符根格式检测
+        assert!(!validate_path("D:\\")); // 非 C: 盘根同样拦截
+        assert!(!validate_path("C:\\Windows\\..\\Windows")); // 归一化后仍拦截
+        assert!(validate_path("C:\\Program Files\\Foo\\x.txt")); // 合法子路径放行
+        assert!(validate_path("C:\\Windows\\..\\System32")); // → C:\System32 子路径合法
+        let home = crate::platform::adapter().home();
+        assert!(!validate_path(&home)); // USERPROFILE 根拦截
+        assert!(!validate_path(&format!("{home}\\AppData\\Roaming\\x"))); // 子路径放行
+    }
+
     #[test]
     fn test_restore_roundtrip() {
         let tmp = TempDir::new().unwrap();
@@ -304,7 +366,7 @@ mod tests {
     #[test]
     fn test_delete_filters_blocked_paths() {
         // validate_path 过滤应生效（不会真正删任何东西 —— 直接测过滤函数）
-        let home = std::env::var("HOME").unwrap();
+        let home = crate::platform::adapter().home();
         let urls = [
             PathBuf::from("/Library"),
             PathBuf::from(format!("{home}/Library/Preferences/x")),

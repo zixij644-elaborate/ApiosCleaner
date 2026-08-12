@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::format::pear_format;
 use crate::model::{Condition, SkipCondition};
+use crate::platform::SystemPaths;
 
 fn cond(
     bundle_id: &str,
@@ -32,7 +33,7 @@ fn cond(
 
 /// 每应用 include/exclude/force 条件（Conditions.swift:45-202）
 pub fn conditions() -> Vec<Condition> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::platform::adapter().home();
     vec![
         cond(
             "com.apple.dt.xcode",
@@ -204,7 +205,7 @@ pub fn conditions() -> Vec<Condition> {
 
 /// 系统文件/文件夹跳过条件（Conditions.swift:207-213）
 pub fn skip_conditions() -> Vec<SkipCondition> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::platform::adapter().home();
     vec![SkipCondition {
         skip_prefix: vec![
             "mobiledocuments".to_string(),

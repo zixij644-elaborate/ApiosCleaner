@@ -9,6 +9,7 @@ use crate::conditions;
 use crate::format::pear_format;
 use crate::locations::Locations;
 use crate::model::{AppInfo, Condition};
+use crate::platform::SystemPaths;
 
 /// UUID 容器目录名（ReversePathsFetch.swift:280-285 的 containerNameByUUID 正则）
 static UUID_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -80,7 +81,7 @@ fn is_uuid_formatted(file_name: &str) -> bool {
 
 impl ReversePathsSearcher {
     pub fn new(locations: Locations, sorted_apps: Vec<AppInfo>) -> ReversePathsSearcher {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::platform::adapter().home();
 
         // 标识集合预计算：≥5 字符的 bundle id / 应用名 / entitlements
         // （原版逐路径 × 逐应用 × 逐标识的嵌套循环 → 扁平 needle 列表）
