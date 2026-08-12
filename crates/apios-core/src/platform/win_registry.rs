@@ -75,8 +75,9 @@ extern "system" {
 }
 
 /// UTF-16 转换助手
+/// 宽字符串 —— Win32 API 要求 NUL 结尾（缺了会读越界字节，值名/键名随机写歪）
 fn widen(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
+    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 /// 读到第一个 NUL 为止

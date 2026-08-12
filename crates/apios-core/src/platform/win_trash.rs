@@ -78,13 +78,19 @@ pub fn recycle_batch(paths: &[PathBuf]) -> Vec<PathBuf> {
     if paths.is_empty() {
         return Vec::new();
     }
-    if shfileop_delete(paths) {
-        return paths.to_vec();
+    // 先滤掉调用时不存在的路径：它们不可能被"移入"回收站，也不该计入 moved
+    // （事后存在性检查无法区分"批量中已移走"与"本就不存在"）
+    let existing: Vec<PathBuf> = paths.iter().filter(|p| p.exists()).cloned().collect();
+    if existing.is_empty() {
+        return Vec::new();
+    }
+    if shfileop_delete(&existing) {
+        return existing;
     }
     // 批量失败：已不存在的 = 批量调用中已移走（部分成功）
     let mut moved: Vec<PathBuf> = Vec::new();
     let mut remaining: Vec<PathBuf> = Vec::new();
-    for p in paths {
+    for p in &existing {
         if p.exists() {
             remaining.push(p.clone());
         } else {

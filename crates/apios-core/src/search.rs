@@ -406,10 +406,11 @@ mod tests {
             .collect();
 
         // 深度2 匹配项是 lulu-data.bin，父目录 HelperTools 非标准 → 应记录 HelperTools
+        // （组件匹配而非字符串 ends_with：Windows 分隔符是反斜杠）
         assert!(
             paths
                 .iter()
-                .any(|p| p.ends_with("Objective-See/HelperTools")),
+                .any(|p| Path::new(p).ends_with(Path::new("Objective-See/HelperTools"))),
             "应回退到供应商目录: {paths:?}"
         );
         assert!(
@@ -440,7 +441,7 @@ mod tests {
         assert!(
             paths
                 .iter()
-                .any(|p| p.ends_with("Application Support/lulu-data.bin")),
+                .any(|p| Path::new(p).ends_with(Path::new("Application Support/lulu-data.bin"))),
             "标准子目录下应记录文件本身: {paths:?}"
         );
     }

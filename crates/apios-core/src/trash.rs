@@ -358,7 +358,7 @@ mod tests {
         assert!(validate_path("C:\\Windows\\..\\System32")); // → C:\System32 子路径合法
         let home = crate::platform::adapter().home();
         assert!(!validate_path(&home)); // USERPROFILE 根拦截
-        assert!(!validate_path(&format!("{home}\\AppData\\Roaming\\x"))); // 子路径放行
+        assert!(validate_path(&format!("{home}\\AppData\\Roaming\\x"))); // 子路径放行
     }
 
     /// move_to_trash_dir（POSIX 归档核心函数）直接单测：

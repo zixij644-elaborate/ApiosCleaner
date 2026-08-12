@@ -221,8 +221,10 @@ mod tests {
 
     #[test]
     fn test_parse_list_sorts() {
+        // 列宽分格：解析器按 ≥2 空格分列（单空格保留在包名内），输入须为真实
+        // winget 的填充形态（否则整行被跳过）
         let out = "Name    Version\n--------  -------\n\
-            zz 2.0\naa 1.0\n";
+            zz          2.0\naa          1.0\n";
         let pkgs = parse_winget_list(out);
         assert_eq!(pkgs[0].name, "aa");
         assert_eq!(pkgs[1].name, "zz");
