@@ -1,0 +1,54 @@
+//! 平台适配层 —— 统一接口 + 条件编译的平台实现
+//!
+//! 架构原则（README "Platform adapters"）：
+//! - 核心引擎（matcher/search/orphan/format/scan）只依赖本模块的 trait，零 OS API
+//! - 每个平台一个实现，用 `cfg(target_os)` 在编译期选择（`Adapter` 类型别名，零虚表开销）
+//! - 各平台实现可自由使用原生 API 做最优实现（macOS: codesign；Linux: desktop 文件；Windows: 注册表/卸载项）
+//!
+//! 当前实现：
+//! - macOS: codesign 元数据、darwin 缓存目录、~/Library 布局、~/.Trash
+//! - 其他平台: fallback 基础版（XDG 目录约定），待各平台专业适配
+
+use std::path::{Path, PathBuf};
+
+/// 系统目录布局：应用搜索路径与用户目录
+pub trait SystemPaths {
+    fn home(&self) -> String;
+    fn user_cache_dir(&self) -> String;
+    fn user_temp_dir(&self) -> String;
+    /// 应用相关文件搜索路径（原 LocationManager.appsPaths）
+    fn apps_paths(&self) -> Vec<String>;
+    /// 反向（孤儿）搜索路径（原 LocationManager.reversePaths）
+    fn reverse_paths(&self) -> Vec<String>;
+    /// 应用支持目录下的子目录列表（深度搜索）
+    fn app_support_subdirs(&self) -> Vec<String>;
+}
+
+/// 应用元数据提取（每平台机制不同：macOS codesign / Linux desktop 文件 / Windows 注册表）
+pub trait AppMetadata {
+    /// entitlements（application-groups / iCloud 容器标识；其他平台可无此概念）
+    fn entitlements(&self, app_path: &Path) -> Option<Vec<String>>;
+    /// 团队标识符（macOS codesign 概念；其他平台返回 None）
+    fn team_identifier(&self, app_path: &Path) -> Option<String>;
+}
+
+/// 回收站语义（macOS ~/.Trash / Linux XDG trash / Windows 回收站）
+pub trait Trash {
+    fn trash_dir(&self) -> PathBuf;
+}
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(not(target_os = "macos"))]
+mod fallback;
+
+/// 当前平台的适配器类型（cfg 编译期选择）
+#[cfg(target_os = "macos")]
+pub type Adapter = macos::MacOsAdapter;
+#[cfg(not(target_os = "macos"))]
+pub type Adapter = fallback::FallbackAdapter;
+
+/// 当前平台的适配器实例
+pub fn adapter() -> Adapter {
+    Adapter::new()
+}

@@ -2,7 +2,7 @@
 //! (old/Pearcleaner/Logic/UndoManager.swift:22-174)
 //!
 //! 语义要点：
-//! - 在 ~/.Trash 下创建 `<App名>_<yyyy-MM-dd_HH-mm-ss>` 归档目录
+//! - 在回收站目录（平台适配层，macOS 为 ~/.Trash）下创建 `<App名>_<yyyy-MM-dd_HH-mm-ss>` 归档目录
 //! - 逐文件移动，重名时追加 -1/-2 后缀
 //! - 安全校验阻止删除系统关键路径
 //! - 原版用 /bin/mv 链（支持 root helper）；PoC 用 fs::rename，失败返回 false
@@ -10,6 +10,8 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Local;
+
+use crate::platform::Trash;
 
 /// isWritableFile 移植（CLI.swift uninstall-all/remove-orphaned 的受保护文件检测）：
 /// POSIX access(W_OK) 语义，root 恒可写 → sudo 下不触发受保护分支
@@ -91,8 +93,7 @@ pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult
         return result;
     }
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let trash = PathBuf::from(format!("{home}/.Trash"));
+    let trash = crate::platform::adapter().trash_dir();
 
     // 归档目录名（UndoManager.swift:85-104）
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();

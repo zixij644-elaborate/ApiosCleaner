@@ -11,6 +11,7 @@ pub mod locations;
 pub mod matcher;
 pub mod model;
 pub mod orphan;
+pub mod platform;
 pub mod scan;
 pub mod search;
 pub mod trash;
