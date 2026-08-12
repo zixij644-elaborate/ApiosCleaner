@@ -382,6 +382,21 @@ fn main() {
 
 // ---------- <app> 参数解析 ----------
 
+/// Windows 发现结果缓存：同一条命令里 find_app_by_name 与 get_app_info_or_exit
+/// 各触发一次全量枚举（注册表三视图 + 开始菜单 walk，~140 条目），结果确定性
+/// 一致 —— 进程内缓存避免翻倍开销。CLI 是一次性进程，无陈旧问题。
+#[cfg(windows)]
+fn discover_apps_cached() -> Vec<AppInfo> {
+    use std::sync::LazyLock;
+    static CACHE: LazyLock<std::sync::Mutex<Option<Vec<AppInfo>>>> =
+        LazyLock::new(|| std::sync::Mutex::new(None));
+    let mut guard = CACHE.lock().unwrap_or_else(|p| p.into_inner());
+    if guard.is_none() {
+        *guard = Some(apios_core::platform::adapter().discover_installed_apps());
+    }
+    guard.as_ref().unwrap().clone()
+}
+
 /// 参数是路径形式（含目录分隔或带 .app 后缀）？
 /// 注意：不含 `Path::exists()` —— 裸名（如 "Firefox"）若碰巧在 cwd 有同名文件会被劫持
 /// 成路径，绕过应用名查找。裸名一律走 `find_app_by_name`。
@@ -403,7 +418,7 @@ fn find_app_by_name(name: &str, folders: &[String]) -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let _ = folders;
-        let apps = apios_core::platform::adapter().discover_installed_apps();
+        let apps = discover_apps_cached();
         let lower = name.to_lowercase();
         // 精确匹配优先；否则前缀匹配（注册表 DisplayName 常带版本号，
         // 如 "7-Zip 26.01 (x64)" → 输入 "7-Zip" 命中）。多命中排序：
@@ -503,7 +518,7 @@ fn resolve_app_or_exit(arg: &str) -> PathBuf {
 fn get_app_info_or_exit(path: &Path) -> AppInfo {
     #[cfg(windows)]
     {
-        let apps = apios_core::platform::adapter().discover_installed_apps();
+        let apps = discover_apps_cached();
         if let Some(app) = find_app_by_path(path, &apps) {
             return app;
         }
