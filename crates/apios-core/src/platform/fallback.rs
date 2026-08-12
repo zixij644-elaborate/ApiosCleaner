@@ -9,11 +9,12 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    AppMetadata, DevEnvPaths, PackageManager, PackageManagers, ProcessControl, SpotlightIndex,
-    SystemPaths, Trash,
+    AppMetadata, DevEnvPaths, PackageManager, PackageManagers, PluginPaths, ProcessControl,
+    SpotlightIndex, SystemPaths, Trash,
 };
 use crate::dev_env::DevEnv;
 use crate::model::{AppInfo, Sensitivity};
+use crate::plugin::PluginCategory;
 
 /// 非 macOS 平台的基础适配器（当前按 Linux XDG 约定提供默认值）
 pub struct FallbackAdapter {
@@ -214,6 +215,12 @@ fn dev_envs_table() -> Vec<DevEnv> {
 impl DevEnvPaths for FallbackAdapter {
     fn dev_envs(&self) -> Vec<DevEnv> {
         dev_envs_table()
+    }
+}
+
+impl PluginPaths for FallbackAdapter {
+    fn plugin_categories(&self) -> Vec<PluginCategory> {
+        vec![] // 其他平台暂无 macOS 式插件目录体系，返回空
     }
 }
 

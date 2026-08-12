@@ -92,6 +92,12 @@ pub trait PackageManager {
     fn autoremove(&self) -> Result<(), String>;
 }
 
+/// 插件分类路径表（`plugins` 命令用；原版 Locations.plugins.subcategories）。
+/// macOS 18 个分类全表；其他平台暂无可移植的等价目录结构，返回空。
+pub trait PluginPaths {
+    fn plugin_categories(&self) -> Vec<crate::plugin::PluginCategory>;
+}
+
 /// 适配器暴露本平台支持的包管理器（多包管理器入口）
 pub trait PackageManagers {
     fn package_managers(&self) -> Vec<Box<dyn PackageManager>>;

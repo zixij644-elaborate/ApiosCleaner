@@ -7,6 +7,8 @@
 //!   apios clean-orphan       删除全部孤儿文件（交互确认）
 //!   apios dev-clean [env]    列出开发环境缓存；带 <env> 则清理（交互确认）
 //!   apios pkg <pm> <action>  包管理器：卸载包本体 + 依赖处理（brew 为当前实现）
+//!   apios plugins [类别]     列出插件（18 类：音频/偏好面板/QuickLook 等）
+//!   apios plugins --clean    清理插件（交互确认；可指定类别，如 --clean audio）
 //!   apios lipo [app]         扫描通用（fat）二进制，显示可省空间（只读；macOS 专属）
 //!   apios lipo thin <app>    瘦身为当前架构（交互确认；--sign 可选 ad-hoc 重签；macOS 专属）
 //!
@@ -30,7 +32,10 @@ use apios_core::orphan::ReversePathsSearcher;
 use apios_core::pkg::{detect_kind, PkgKind};
 #[cfg(target_os = "macos")]
 use apios_core::platform::lipo::{self, cpu_name, current_cputype, select_runnable_slice, FatFile};
-use apios_core::platform::{PackageManager, PackageManagers, ProcessControl, SystemPaths};
+use apios_core::platform::{
+    PackageManager, PackageManagers, PluginPaths, ProcessControl, SystemPaths,
+};
+use apios_core::plugin::{group_by_category, scan_plugins, PluginCategory};
 use apios_core::scan::{default_app_folders, get_sorted_apps};
 use apios_core::search::AppPathFinder;
 use apios_core::trash::{delete_files, is_writable};
@@ -77,6 +82,15 @@ enum Command {
         pm: String,
         #[command(subcommand)]
         action: PkgAction,
+    },
+    /// Scan and clean plugin directories (audio, preference panes, quick look, ...)
+    Plugins {
+        /// Category name to show (case-insensitive); omit for all
+        category: Option<String>,
+        /// Delete the listed plugins instead of just listing (asks for confirmation).
+        /// Optional category name; omit for all
+        #[arg(long, num_args = 0..=1, default_missing_value = "all")]
+        clean: Option<String>,
     },
     /// Scan apps for universal (fat) binaries; thin them to the current architecture
     /// (macOS only: universal binaries are a Darwin format)
@@ -128,6 +142,10 @@ fn main() {
         Command::CleanOrphan => cmd_clean_orphan(&cli),
         Command::DevClean { ref env } => cmd_dev_clean(&cli, env.as_deref()),
         Command::Pkg { ref pm, ref action } => cmd_pkg(&cli, pm, action),
+        Command::Plugins {
+            ref category,
+            ref clean,
+        } => cmd_plugins(&cli, category.as_deref(), clean.as_deref()),
         #[cfg(target_os = "macos")]
         Command::Lipo {
             ref app,
@@ -614,6 +632,117 @@ fn cmd_pkg_autoremove(cli: &Cli, pm: &dyn PackageManager) {
         exit(1);
     }
     println!("Autoremoved {} package(s).", orphans.len());
+}
+
+// ---------- 插件（PluginsView 移植） ----------
+
+/// 分类选择：null/"all" → 全部分类；否则大小写不敏感匹配单个分类
+fn resolve_plugin_categories(
+    categories: &[PluginCategory],
+    arg: Option<&str>,
+) -> Vec<PluginCategory> {
+    let Some(arg) = arg else {
+        return categories.to_vec();
+    };
+    if arg.eq_ignore_ascii_case("all") {
+        return categories.to_vec();
+    }
+    match categories.iter().find(|c| c.name.eq_ignore_ascii_case(arg)) {
+        Some(c) => vec![c.clone()],
+        None => {
+            eprintln!("apios: unknown plugin category \"{arg}\"");
+            let names: Vec<&str> = categories.iter().map(|c| c.name.as_str()).collect();
+            eprintln!("available: {}", names.join(", "));
+            exit(1);
+        }
+    }
+}
+
+/// 路径截断显示（长路径中间省略，对齐 lipo 惯例）
+fn truncated(path: &Path, max: usize) -> String {
+    let s = path.display().to_string();
+    if s.chars().count() <= max {
+        return s;
+    }
+    let keep = max / 2 - 1;
+    let head: String = s.chars().take(keep).collect();
+    let tail: String = s.chars().skip(s.chars().count() - keep).collect();
+    format!("{head}…{tail}")
+}
+
+fn cmd_plugins(cli: &Cli, category: Option<&str>, clean: Option<&str>) {
+    let categories = apios_core::platform::adapter().plugin_categories();
+    // --clean 有值 → 删除模式（目标 = clean 值）；否则列出（目标 = category 值）
+    let target = resolve_plugin_categories(&categories, clean.or(category));
+    let grouped = group_by_category(scan_plugins(&target));
+    let count: usize = grouped.iter().map(|(_, list)| list.len()).sum();
+    let total: u64 = grouped
+        .iter()
+        .flat_map(|(_, list)| list)
+        .map(|p| p.size)
+        .sum();
+
+    if clean.is_some() {
+        if count == 0 {
+            println!("Nothing to delete.");
+            return;
+        }
+        for (cat, list) in &grouped {
+            let cat_total: u64 = list.iter().map(|p| p.size).sum();
+            println!("{cat} ({}, {})", list.len(), fmt_size(cat_total));
+            for p in list {
+                println!("  {}  {}", truncated(&p.path, 64), fmt_size(p.size));
+            }
+        }
+        if !confirm(
+            cli,
+            &format!(
+                "\nDelete {count} plugin(s) — {}? (moved to Trash)",
+                fmt_size(total)
+            ),
+        ) {
+            println!("Aborted — nothing was deleted.");
+            return;
+        }
+        let paths: Vec<PathBuf> = grouped
+            .iter()
+            .flat_map(|(_, list)| list)
+            .map(|p| p.path.clone())
+            .collect();
+        let result = delete_files(&paths, Some(&format!("Plugins ({count} items)")));
+        if result.success {
+            println!(
+                "\nDeleted {} files to Trash ({})",
+                result.moved.len(),
+                result.bundle_folder.display()
+            );
+        }
+        if !result.failed.is_empty() {
+            eprintln!("apios: {} file(s) could not be moved", result.failed.len());
+            exit(1);
+        }
+        return;
+    }
+
+    // 只读列出
+    if count == 0 {
+        println!("No plugins found.");
+        return;
+    }
+    for (cat, list) in &grouped {
+        let cat_total: u64 = list.iter().map(|p| p.size).sum();
+        println!("{cat} ({}, {})", list.len(), fmt_size(cat_total));
+        for p in list {
+            println!("  {}  {}", truncated(&p.path, 64), fmt_size(p.size));
+        }
+    }
+    println!(
+        "\n{} plugin(s) across {} categories — {}.",
+        count,
+        grouped.len(),
+        fmt_size(total)
+    );
+    println!("Run `apios plugins --clean [category]` to delete them (moved to Trash).");
 }
 
 // ---------- Lipo（fat 瘦身） ----------

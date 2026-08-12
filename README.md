@@ -24,8 +24,8 @@ independently — see [Beyond a straight port](CHANGELOG.md#beyond-a-straight-po
   are pure Rust with no OS API dependency and type-check unchanged on
   non-macOS targets; platform behavior (paths, trash, Spotlight, package
   managers) lives behind per-OS adapters that can be tuned independently
-- **Testability**: 105 unit tests covering scan/match/orphan/trash/lipo/pkg
-  semantics, with a Linux cross-check CI gate
+- **Testability**: 109 unit tests covering scan/match/orphan/trash/lipo/pkg/
+  plugin semantics, with a Linux cross-check CI gate
 - **Safety first**: all deletions are trash-based (reversible), critical
   system paths are protected against normalization tricks, and every
   destructive command asks for confirmation
@@ -35,7 +35,7 @@ independently — see [Beyond a straight port](CHANGELOG.md#beyond-a-straight-po
 | Area | State |
 |---|---|
 | Core engine (scan/match/orphan/trash) | ✅ implemented + unit tested |
-| CLI (`list` / `uninstall` / `orphan` / `clean-orphan` / `dev-clean` / `pkg` / `lipo`) | ✅ works on macOS, output verified against the reference implementation |
+| CLI (`list` / `uninstall` / `orphan` / `clean-orphan` / `dev-clean` / `pkg` / `plugins` / `lipo`) | ✅ works on macOS, output verified against the reference implementation |
 | Platform adapters | ⚠️ macOS: paths / app metadata / trash in place; Linux, Windows: ⬜ planned |
 | Verification | ✅ 9/9 and 17/17 file sets identical on test apps |
 | UI | ⬜ planned |
@@ -112,6 +112,17 @@ apios pkg brew uninstall --zap firefox
 
 # Remove orphaned dependencies (dry-run is shown before confirmation)
 apios pkg brew autoremove
+
+# List plugin directories (audio components, preference panes, QuickLook
+# generators, screen savers, ... — 18 categories, read-only)
+apios plugins
+
+# Show one category (case-insensitive)
+apios plugins audio
+
+# Delete plugins, moved to Trash (asks for confirmation; pass a category to
+# limit the scope, e.g. `apios plugins --clean audio`)
+apios plugins --clean
 
 # Lipo (macOS only): scan all apps for universal (fat) binaries and show how
 # much can be freed (read-only); or scan a single app
