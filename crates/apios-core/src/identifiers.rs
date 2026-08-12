@@ -22,8 +22,18 @@ pub struct CachedIdentifiers {
 
 /// 常见 helper 后缀（AppPathsFetch.swift:108）
 const COMMON_SUFFIXES: &[&str] = &[
-    "helper", "agent", "daemon", "service", "xpc", "launcher", "updater", "installer",
-    "uninstaller", "login", "extension", "plugin",
+    "helper",
+    "agent",
+    "daemon",
+    "service",
+    "xpc",
+    "launcher",
+    "updater",
+    "installer",
+    "uninstaller",
+    "login",
+    "extension",
+    "plugin",
 ];
 
 impl CachedIdentifiers {
@@ -48,7 +58,10 @@ impl CachedIdentifiers {
             .collect::<String>();
 
         let formatted_app_name = pear_format(&app.app_name);
-        let app_name_letters_only: String = formatted_app_name.chars().filter(|c| c.is_alphabetic()).collect();
+        let app_name_letters_only: String = formatted_app_name
+            .chars()
+            .filter(|c| c.is_alphabetic())
+            .collect();
         // 原版：lastPathComponent.replacingOccurrences(of: ".app", with: "")（替换所有出现）
         let path_component_name = app
             .path
@@ -58,8 +71,11 @@ impl CachedIdentifiers {
 
         // 原版 isValidBundleIdentifier（AppPathsFetch.swift:481-487）
         let raw_components: Vec<&str> = app.bundle_identifier.split('.').collect();
-        let use_bundle_identifier =
-            if raw_components.len() == 1 { app.bundle_identifier.chars().count() >= 5 } else { true };
+        let use_bundle_identifier = if raw_components.len() == 1 {
+            app.bundle_identifier.chars().count() >= 5
+        } else {
+            true
+        };
 
         // 3 段 bundle ID 时提取公司名："com.knollsoft.Rectangle" → "knollsoft"
         // 注意：用未过滤的 rawComponents（原版行为，与 bundle_components 不同）
@@ -74,7 +90,11 @@ impl CachedIdentifiers {
             .iter()
             .filter_map(|e| {
                 let formatted = pear_format(e);
-                if formatted.is_empty() { None } else { Some(formatted) }
+                if formatted.is_empty() {
+                    None
+                } else {
+                    Some(formatted)
+                }
             })
             .collect();
 
@@ -139,7 +159,8 @@ mod tests {
 
     #[test]
     fn test_standard_app() {
-        let ids = CachedIdentifiers::from_app_info(&app("com.microsoft.VSCode", "Visual Studio Code"));
+        let ids =
+            CachedIdentifiers::from_app_info(&app("com.microsoft.VSCode", "Visual Studio Code"));
         assert_eq!(ids.formatted_bundle_id, "commicrosoftvscode");
         assert_eq!(ids.bundle_last_two_components, "microsoftvscode");
         assert_eq!(ids.formatted_app_name, "visualstudiocode");
@@ -169,17 +190,18 @@ mod tests {
             Some("comobjectiveseeblockblock")
         );
         // 非后缀结尾 → None
-        let ids2 = CachedIdentifiers::from_app_info(&app(
-            "com.objective-see.blockblock",
-            "BlockBlock",
-        ));
+        let ids2 =
+            CachedIdentifiers::from_app_info(&app("com.objective-see.blockblock", "BlockBlock"));
         assert_eq!(ids2.formatted_base_bundle_id, None);
     }
 
     #[test]
     fn test_version_stripped_name() {
         let ids = CachedIdentifiers::from_app_info(&app("com.example.Bartender", "Bartender 6"));
-        assert_eq!(ids.formatted_app_name_stripped.as_deref(), Some("bartender"));
+        assert_eq!(
+            ids.formatted_app_name_stripped.as_deref(),
+            Some("bartender")
+        );
         // 无版本号时 stripped 应等于普通名 → None
         let ids2 = CachedIdentifiers::from_app_info(&app("com.example.WeChat", "WeChat"));
         assert_eq!(ids2.formatted_app_name_stripped, None);

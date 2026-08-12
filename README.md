@@ -30,16 +30,37 @@ core can ship as per-OS builds, each tuned for its platform.
 | Area | State |
 |---|---|
 | Core engine (scan/match/orphan/trash) | ✅ implemented + unit tested (32/32) |
-| CLI (`list` / `list-orphaned` / `uninstall` / `uninstall-all` / `remove-orphaned`) | ✅ works on macOS, output verified against the reference implementation |
+| CLI (`list` / `uninstall` / `orphan` / `clean-orphan`) | ✅ works on macOS, output verified against the reference implementation |
 | Platform adapters | ⚠️ macOS: paths / app metadata / trash in place; Linux, Windows: ⬜ planned |
-| Verification | ✅ 8/8 and 16/16 file sets identical on test apps |
+| Verification | ✅ 9/9 and 17/17 file sets identical on test apps |
 | UI | ⬜ planned |
 
 ## Build
 
 ```sh
 cargo build --release
-./target/release/apios-cleaner list /Applications/SomeApp.app
+```
+
+## Usage
+
+The `<app>` argument accepts a full path, an app name (auto-looked-up in the
+default application folders), or `.` for the current directory. Deleting
+commands ask for confirmation (`y/N`, default no); pass `-y` to skip it
+(for scripting or GUI/automation integration).
+
+```sh
+# List all related files of an app (read-only)
+./target/release/apios list /Applications/SomeApp.app
+./target/release/apios list SomeApp
+
+# Uninstall an app: the bundle and ALL related files, moved to Trash
+./target/release/apios uninstall SomeApp
+
+# List orphaned files left behind by uninstalled apps (read-only)
+./target/release/apios orphan
+
+# Delete all orphaned files
+./target/release/apios clean-orphan
 ```
 
 ## License

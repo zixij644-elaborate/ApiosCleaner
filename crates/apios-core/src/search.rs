@@ -170,12 +170,7 @@ impl<'a> AppPathFinder<'a> {
 
         if current_depth < max_depth {
             for subdirectory in subdirectories {
-                self.process_location(
-                    &subdirectory,
-                    current_depth + 1,
-                    max_depth,
-                    is_library_root,
-                );
+                self.process_location(&subdirectory, current_depth + 1, max_depth, is_library_root);
             }
         }
     }
@@ -220,7 +215,11 @@ impl<'a> AppPathFinder<'a> {
             &self.app.bundle_identifier,
             self.sensitivity,
         );
-        temp.extend(spotlight.into_iter().filter(|p| !self.collection.contains(p)));
+        temp.extend(
+            spotlight
+                .into_iter()
+                .filter(|p| !self.collection.contains(p)),
+        );
 
         let exclude_paths: HashSet<&Path> = outliers_ex.iter().map(|p| p.as_path()).collect();
         temp.retain(|url| !exclude_paths.contains(url.as_path()));
@@ -231,7 +230,10 @@ impl<'a> AppPathFinder<'a> {
         let mut previous: Option<&Path> = None;
         for url in &temp {
             if let Some(prev) = previous {
-                if url.to_string_lossy().starts_with(&format!("{}/", prev.to_string_lossy())) {
+                if url
+                    .to_string_lossy()
+                    .starts_with(&format!("{}/", prev.to_string_lossy()))
+                {
                     continue;
                 }
             }
@@ -295,9 +297,13 @@ mod tests {
         let fake_home = tmp.path().join("FakeHome");
         let app_support = fake_home.join("Library/Application Support/TestApp");
         std::fs::create_dir_all(&app_support).unwrap();
-        std::fs::create_dir_all(&fake_home.join("Library/Preferences")).unwrap();
+        std::fs::create_dir_all(fake_home.join("Library/Preferences")).unwrap();
         std::fs::write(app_support.join("data.plist"), b"x").unwrap();
-        std::fs::write(fake_home.join("Library/Preferences/com.test.app.plist"), b"x").unwrap();
+        std::fs::write(
+            fake_home.join("Library/Preferences/com.test.app.plist"),
+            b"x",
+        )
+        .unwrap();
         std::fs::write(fake_home.join("Library/Preferences/Other.app.plist"), b"x").unwrap();
 
         // 用一个固定的假 home 跑私有方法（直接测 process_location）
@@ -352,7 +358,9 @@ mod tests {
 
         // 深度2 匹配项是 lulu-data.bin，父目录 HelperTools 非标准 → 应记录 HelperTools
         assert!(
-            paths.iter().any(|p| p.ends_with("Objective-See/HelperTools")),
+            paths
+                .iter()
+                .any(|p| p.ends_with("Objective-See/HelperTools")),
             "应回退到供应商目录: {paths:?}"
         );
         assert!(
@@ -381,7 +389,9 @@ mod tests {
             .collect();
 
         assert!(
-            paths.iter().any(|p| p.ends_with("Application Support/lulu-data.bin")),
+            paths
+                .iter()
+                .any(|p| p.ends_with("Application Support/lulu-data.bin")),
             "标准子目录下应记录文件本身: {paths:?}"
         );
     }

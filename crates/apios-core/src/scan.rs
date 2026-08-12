@@ -26,7 +26,8 @@ fn is_restricted(path: &Path, bundle_id: &str) -> bool {
     if bundle_id == "com.alienator88.Pearcleaner" {
         return true;
     }
-    path.to_string_lossy().starts_with("/Applications/Utilities/")
+    path.to_string_lossy()
+        .starts_with("/Applications/Utilities/")
 }
 
 /// 发现已安装应用（并行 walk；跳过符号链接与受限应用）。

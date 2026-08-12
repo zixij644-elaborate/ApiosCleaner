@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/apios-core", "crates/apios-cleaner"]
+members = ["crates/apios-core", "crates/apios"]
 
 [workspace.package]
 version = "0.1.0"

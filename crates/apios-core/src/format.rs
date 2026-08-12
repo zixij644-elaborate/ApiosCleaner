@@ -32,7 +32,10 @@ mod tests {
     #[test]
     fn test_pear_format_basic() {
         assert_eq!(pear_format("Pearcleaner"), "pearcleaner");
-        assert_eq!(pear_format("com.alienator88.Pearcleaner"), "comalienator88pearcleaner");
+        assert_eq!(
+            pear_format("com.alienator88.Pearcleaner"),
+            "comalienator88pearcleaner"
+        );
         assert_eq!(pear_format("Visual Studio Code"), "visualstudiocode");
         assert_eq!(pear_format("Bar Tender"), "bartender");
         assert_eq!(pear_format("ABC 123"), "abc123");

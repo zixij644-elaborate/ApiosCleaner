@@ -52,10 +52,10 @@ pub trait Trash {
     fn trash_dir(&self) -> PathBuf;
 }
 
-#[cfg(target_os = "macos")]
-mod macos;
 #[cfg(not(target_os = "macos"))]
 mod fallback;
+#[cfg(target_os = "macos")]
+mod macos;
 
 /// 当前平台的适配器类型（cfg 编译期选择）
 #[cfg(target_os = "macos")]

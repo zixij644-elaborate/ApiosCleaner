@@ -22,8 +22,8 @@ impl FallbackAdapter {
     pub fn new() -> Self {
         let home = std::env::var("HOME").unwrap_or_default();
         // XDG Base Directory 规范
-        let cache_dir = std::env::var("XDG_CACHE_HOME")
-            .unwrap_or_else(|_| format!("{home}/.cache"));
+        let cache_dir =
+            std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| format!("{home}/.cache"));
         let temp_dir = std::env::temp_dir().to_string_lossy().to_string();
         FallbackAdapter {
             home,

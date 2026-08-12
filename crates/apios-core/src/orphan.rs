@@ -52,11 +52,14 @@ fn container_name_by_uuid(path: &Path, home: &str) -> Option<String> {
     if let Ok(entries) = std::fs::read_dir(&containers) {
         for entry in entries.flatten() {
             if entry.file_name().to_string_lossy() == uuid {
-                let metadata = entry.path().join(".com.apple.containermanagerd.metadata.plist");
+                let metadata = entry
+                    .path()
+                    .join(".com.apple.containermanagerd.metadata.plist");
                 if let Ok(data) = std::fs::read(&metadata) {
                     if let Ok(dict) = plist::from_bytes::<plist::Dictionary>(&data) {
-                        if let Some(bundle_id) =
-                            dict.get("MCMMetadataIdentifier").and_then(|v| v.as_string())
+                        if let Some(bundle_id) = dict
+                            .get("MCMMetadataIdentifier")
+                            .and_then(|v| v.as_string())
                         {
                             return Some(bundle_id.to_string());
                         }
@@ -85,7 +88,11 @@ impl ReversePathsSearcher {
                     .iter()
                     .filter_map(|e| {
                         let f = pear_format(e);
-                        if f.is_empty() { None } else { Some(f) }
+                        if f.is_empty() {
+                            None
+                        } else {
+                            Some(f)
+                        }
                     })
                     .collect(),
             })
@@ -147,11 +154,10 @@ impl ReversePathsSearcher {
     fn is_excluded_by_conditions(&self, normalized_path: &str) -> bool {
         for condition in &self.conditions {
             // 仅当条件对应的 app 已安装才生效
-            let installed = self
-                .cached_apps
-                .iter()
-                .any(|c| c.formatted_bundle_id == condition.bundle_id
-                    || c.formatted_bundle_id.contains(&condition.bundle_id));
+            let installed = self.cached_apps.iter().any(|c| {
+                c.formatted_bundle_id == condition.bundle_id
+                    || c.formatted_bundle_id.contains(&condition.bundle_id)
+            });
             if !installed {
                 continue;
             }

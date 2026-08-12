@@ -34,7 +34,10 @@ impl MacOsAdapter {
 /// getconf DARWIN_USER_CACHE_DIR / DARWIN_USER_TEMP_DIR
 fn darwin_ct() -> (String, String) {
     let output = Command::new("/bin/bash")
-        .args(["-c", "echo $(getconf DARWIN_USER_CACHE_DIR) $(getconf DARWIN_USER_TEMP_DIR)"])
+        .args([
+            "-c",
+            "echo $(getconf DARWIN_USER_CACHE_DIR) $(getconf DARWIN_USER_TEMP_DIR)",
+        ])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -53,9 +56,22 @@ fn darwin_ct() -> (String, String) {
 fn list_app_support_directories(home: &str) -> Vec<String> {
     let app_support = format!("{home}/Library/Application Support");
     let exclusions: std::collections::HashSet<&str> = [
-        "MobileSync", ".DS_Store", "Xcode", "SyncServices", "networkserviceproxy", "DiskImages",
-        "CallHistoryTransactions", "App Store", "CloudDocs", "icdd", "iCloud", "Instruments",
-        "AddressBook", "FaceTime", "AskPermission", "CallHistoryDB",
+        "MobileSync",
+        ".DS_Store",
+        "Xcode",
+        "SyncServices",
+        "networkserviceproxy",
+        "DiskImages",
+        "CallHistoryTransactions",
+        "App Store",
+        "CloudDocs",
+        "icdd",
+        "iCloud",
+        "Instruments",
+        "AddressBook",
+        "FaceTime",
+        "AskPermission",
+        "CallHistoryDB",
     ]
     .into_iter()
     .collect();
@@ -215,7 +231,13 @@ impl AppMetadata for MacOsAdapter {
         // 通过 codesign 提取 entitlements plist（替代 SecCodeCopySigningInformation）。
         // 默认输出 OpenStep 旧式格式（Rust plist crate 不支持），--xml 强制 XML
         let ent = Command::new("codesign")
-            .args(["-d", "--entitlements", "-", "--xml", &app_path.to_string_lossy()])
+            .args([
+                "-d",
+                "--entitlements",
+                "-",
+                "--xml",
+                &app_path.to_string_lossy(),
+            ])
             .output()
             .ok()
             .and_then(|o| {
@@ -293,8 +315,7 @@ impl AppMetadata for MacOsAdapter {
                                 let nested_macos = bundle.path().join("Contents/MacOS");
                                 if let Ok(binaries) = std::fs::read_dir(&nested_macos) {
                                     for binary in binaries.flatten() {
-                                        let name =
-                                            binary.file_name().to_string_lossy().to_string();
+                                        let name = binary.file_name().to_string_lossy().to_string();
                                         if name.starts_with('.') || name.chars().count() < 5 {
                                             continue;
                                         }
@@ -453,8 +474,12 @@ mod tests {
 
     #[test]
     fn test_build_predicate_strict() {
-        let p = build_predicate("Microsoft Edge", "com.microsoft.edgemac", Sensitivity::Strict)
-            .unwrap();
+        let p = build_predicate(
+            "Microsoft Edge",
+            "com.microsoft.edgemac",
+            Sensitivity::Strict,
+        )
+        .unwrap();
         assert_eq!(
             p,
             "kMDItemDisplayName == 'Microsoft Edge'cd || kMDItemDisplayName == 'com.microsoft.edgemac'cd"
@@ -477,7 +502,10 @@ mod tests {
     fn test_build_predicate_escapes_quotes() {
         // 用户可控值（Info.plist 应用名）含单引号 → 转义防谓词语法破坏
         let p = build_predicate("It's App", "com.it.sapp", Sensitivity::Strict).unwrap();
-        assert_eq!(p, "kMDItemDisplayName == 'It''s App'cd || kMDItemDisplayName == 'com.it.sapp'cd");
+        assert_eq!(
+            p,
+            "kMDItemDisplayName == 'It''s App'cd || kMDItemDisplayName == 'com.it.sapp'cd"
+        );
     }
 
     #[test]

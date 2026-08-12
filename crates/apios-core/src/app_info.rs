@@ -13,10 +13,7 @@ use crate::platform::AppMetadata;
 
 /// 容器 UUID 目录名（AppPathsFetch.swift:148-150 的 UUID 正则）
 static CONTAINER_UUID_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(
-        r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$",
-    )
-    .unwrap()
+    regex::Regex::new(r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$").unwrap()
 });
 
 /// 从应用 bundle 路径构建 AppInfo（PoC：直接解析 Info.plist，不用 Bundle 缓存）
@@ -105,7 +102,9 @@ pub fn get_app_containers(home: &str, bundle_identifier: &str) -> Vec<PathBuf> {
             if !CONTAINER_UUID_REGEX.is_match(&dir_name) {
                 continue;
             }
-            let metadata = entry.path().join(".com.apple.containermanagerd.metadata.plist");
+            let metadata = entry
+                .path()
+                .join(".com.apple.containermanagerd.metadata.plist");
             if let Ok(data) = std::fs::read(&metadata) {
                 if let Ok(dict) = plist::from_bytes::<plist::Dictionary>(&data) {
                     if dict

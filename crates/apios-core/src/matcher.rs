@@ -71,9 +71,7 @@ pub fn specific_condition(
     }
 
     // --- Steam 游戏主目录 ---
-    if app.steam
-        && path_str.contains("/Library/Application Support/Steam/steamapps/common/")
-    {
+    if app.steam && path_str.contains("/Library/Application Support/Steam/steamapps/common/") {
         let folder_name = pear_format(&path.file_name().unwrap_or_default().to_string_lossy());
         if folder_name == ids.formatted_app_name || folder_name == ids.app_name_letters_only {
             return true;
@@ -83,10 +81,13 @@ pub fn specific_condition(
     // --- Steam 清单文件（appmanifest_<id>.acf）---
     if app.steam
         && path_str.contains("/Library/Application Support/Steam/steamapps/")
-        && path.file_name().is_some_and(|n| n.to_string_lossy().starts_with("appmanifest_"))
+        && path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("appmanifest_"))
         && path_ext == "acf"
     {
-        if let Some(game_id_from_file) = extract_game_id(&path.file_name().unwrap_or_default().to_string_lossy())
+        if let Some(game_id_from_file) =
+            extract_game_id(&path.file_name().unwrap_or_default().to_string_lossy())
         {
             if let Some(game_id_from_launcher) = get_steam_game_id(&app.path) {
                 return game_id_from_file == game_id_from_launcher;
@@ -109,11 +110,22 @@ pub fn specific_condition(
     // --- 每应用条件（先 exclude 后 include，AppPathsFetch.swift:369-378）---
     if ids.use_bundle_identifier {
         for condition in conditions {
-            if ids.formatted_bundle_id.contains(condition.bundle_id.as_str()) {
-                if condition.exclude.iter().any(|e| normalized_item_name.contains(e.as_str())) {
+            if ids
+                .formatted_bundle_id
+                .contains(condition.bundle_id.as_str())
+            {
+                if condition
+                    .exclude
+                    .iter()
+                    .any(|e| normalized_item_name.contains(e.as_str()))
+                {
                     return false;
                 }
-                if condition.include.iter().any(|i| normalized_item_name.contains(i.as_str())) {
+                if condition
+                    .include
+                    .iter()
+                    .any(|i| normalized_item_name.contains(i.as_str()))
+                {
                     return true;
                 }
             }
@@ -348,7 +360,9 @@ mod tests {
         // 没有 run.sh 时不应崩溃
         let result = specific_condition(
             "appmanifest_1289310acf",
-            Path::new("/Users/u/Library/Application Support/Steam/steamapps/appmanifest_1289310.acf"),
+            Path::new(
+                "/Users/u/Library/Application Support/Steam/steamapps/appmanifest_1289310.acf",
+            ),
             &app,
             &ids,
             Sensitivity::Deep,
@@ -360,8 +374,14 @@ mod tests {
 
     #[test]
     fn test_extract_game_id() {
-        assert_eq!(extract_game_id("appmanifest_1289310.acf").as_deref(), Some("1289310"));
-        assert_eq!(extract_game_id("appmanifest_123.acf").as_deref(), Some("123"));
+        assert_eq!(
+            extract_game_id("appmanifest_1289310.acf").as_deref(),
+            Some("1289310")
+        );
+        assert_eq!(
+            extract_game_id("appmanifest_123.acf").as_deref(),
+            Some("123")
+        );
         assert_eq!(extract_game_id("foo"), None);
     }
 

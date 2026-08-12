@@ -1,9 +1,9 @@
 [package]
-name = "apios-cleaner"
+name = "apios"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Pearcleaner 重写版 CLI"
+description = "ApiosCleaner 命令行工具（命令参数式）"
 
 [dependencies]
 apios-core = { path = "../apios-core" }

@@ -71,7 +71,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "apios-cleaner"
+name = "apios"
 version = "0.1.0"
 dependencies = [
  "apios-core",

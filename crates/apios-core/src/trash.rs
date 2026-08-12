@@ -206,7 +206,9 @@ mod tests {
         assert!(validate_path("/usr/local"));
         let home = std::env::var("HOME").unwrap();
         assert!(!validate_path(&home));
-        assert!(validate_path(&format!("{home}/Library/Preferences/com.test.plist")));
+        assert!(validate_path(&format!(
+            "{home}/Library/Preferences/com.test.plist"
+        )));
         assert!(validate_path("/tmp/foo"));
     }
 
@@ -218,7 +220,7 @@ mod tests {
         let file = src.join("data.txt");
         std::fs::write(&file, b"hello").unwrap();
 
-        let result = delete_into(tmp.path(), &[file.clone()]);
+        let result = delete_into(tmp.path(), std::slice::from_ref(&file));
         assert!(!file.exists());
         assert!(result.moved[0].trash_path.exists());
 
@@ -230,8 +232,14 @@ mod tests {
     fn test_delete_filters_blocked_paths() {
         // validate_path 过滤应生效（不会真正删任何东西 —— 直接测过滤函数）
         let home = std::env::var("HOME").unwrap();
-        let urls = vec![PathBuf::from("/Library"), PathBuf::from(format!("{home}/Library/Preferences/x"))];
-        let valid: Vec<_> = urls.iter().filter(|u| validate_path(&u.to_string_lossy())).collect();
+        let urls = [
+            PathBuf::from("/Library"),
+            PathBuf::from(format!("{home}/Library/Preferences/x")),
+        ];
+        let valid: Vec<_> = urls
+            .iter()
+            .filter(|u| validate_path(&u.to_string_lossy()))
+            .collect();
         assert_eq!(valid.len(), 1);
     }
 }
