@@ -202,6 +202,9 @@ pub fn move_to_trash_dir(
 
     // 建目录 + 逐文件移动（重名后缀，UndoManager.swift:109-132）
     if std::fs::create_dir_all(&bundle_folder).is_err() {
+        // 归档目录建不起来 = 整个操作失败（回收站不可用/权限）。此前返回全空
+        // 结果会被 main.rs 误判为 "Nothing to delete" 而 exit 0 —— 实际什么都没删
+        result.failed = urls.to_vec();
         return result;
     }
 

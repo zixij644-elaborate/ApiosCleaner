@@ -99,13 +99,18 @@ impl SystemPaths for WindowsAdapter {
         out
     }
 
-    /// 孤儿反向搜索路径：AppData 双根 + 文档 + ProgramData
+    /// 孤儿反向搜索路径：AppData 双根 + 文档 + ProgramData + Program Files(+x86)。
+    /// Program Files 是 Windows 卸载残留主战场（卸载器常删不干净）；已装应用
+    /// 引用过的路径会被 needle 匹配排除（reverse_paths_search_cli 只读，
+    /// clean-orphan 前另有 validate_path 保护）—— 低误报风险，补漏为主。
     fn reverse_paths(&self) -> Vec<String> {
         vec![
             self.appdata_roaming.clone(),
             self.appdata_local.clone(),
             format!("{}\\Documents", self.home),
             self.programdata.clone(),
+            self.program_files.clone(),
+            self.program_files_x86.clone(),
         ]
     }
 

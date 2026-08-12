@@ -10,6 +10,7 @@
 //! - 其他平台: fallback 基础版（XDG 目录约定），待各平台专业适配
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use crate::model::{AppInfo, Sensitivity};
 
@@ -168,7 +169,11 @@ pub type Adapter = windows::WindowsAdapter;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub type Adapter = fallback::FallbackAdapter;
 
-/// 当前平台的适配器实例
-pub fn adapter() -> Adapter {
-    Adapter::new()
+/// 当前平台的适配器实例（进程级单例）。
+/// 适配器只持有路径表等不可变数据，每次调用重建是纯浪费 —— macOS 每次
+/// `Adapter::new()` 要 spawn 两次 getconf（validate_path 每 URL 调用一次
+/// adapter()，删除大列表时显著）。`&'static` 借用零拷贝。
+pub fn adapter() -> &'static Adapter {
+    static ADAPTER: LazyLock<Adapter> = LazyLock::new(Adapter::new);
+    &ADAPTER
 }

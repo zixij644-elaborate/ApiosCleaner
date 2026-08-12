@@ -51,8 +51,10 @@ fn build_container_uuid_map(home: &str) -> std::collections::HashMap<String, Str
 pub struct ReversePathsSearcher {
     locations: Locations,
     collection: Vec<PathBuf>,
-    /// 全部 ≥5 字符标识（bundle id + 应用名 + entitlements）—— 路径匹配用
-    needles: Vec<String>,
+    /// needles 的合并 Alternation 正则（new() 构建一次，匹配 O(paths)）。
+    /// 标识来自 ≥5 字符的 bundle id / 应用名 / entitlements（Windows 另含
+    /// 非 ASCII 短名），构建时已 pearFormat + escape
+    needles_regex: Option<regex::Regex>,
     /// 仅 bundle id（≥5 字符）—— 容器匹配用（语义：cn 包含已安装 bundle id）
     bundle_needles: Vec<String>,
     /// UUID 容器目录名 → bundle ID（new() 预建，替代逐路径 read_dir）
@@ -79,6 +81,23 @@ fn is_uuid_formatted(file_name: &str) -> bool {
     file_name.len() == 32 && file_name.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// needle 长度门槛。macOS 有 bundle id（≥5 无歧义）—— 短名防误配
+/// （"win"/"sys" 类短词路径命中率过高）；Windows 无 bundle id 兜底，
+/// 中文短名应用（微信/QQ/百度网盘，恰是最常见清理对象）若同样被 <5
+/// 丢弃则残留永远匹配不到。非 ASCII 名放宽到 ≥2 字符（单字名罕见且
+/// 单字符 needle 误配面过大）；纯 ASCII 保持 ≥5。
+fn needle_qualifies(s: &str) -> bool {
+    let long_enough = s.chars().count() >= 5;
+    #[cfg(windows)]
+    {
+        long_enough || (s.chars().count() >= 2 && !s.is_ascii())
+    }
+    #[cfg(not(windows))]
+    {
+        long_enough
+    }
+}
+
 impl ReversePathsSearcher {
     pub fn new(locations: Locations, sorted_apps: Vec<AppInfo>) -> ReversePathsSearcher {
         let home = crate::platform::adapter().home();
@@ -89,12 +108,12 @@ impl ReversePathsSearcher {
         let mut bundle_needles: Vec<String> = Vec::new();
         for app in &sorted_apps {
             let bundle_id = pear_format(&app.bundle_identifier);
-            if bundle_id.chars().count() >= 5 {
+            if needle_qualifies(&bundle_id) {
                 needles.push(bundle_id.clone());
                 bundle_needles.push(bundle_id);
             }
             let app_name = pear_format(&app.app_name);
-            if app_name.chars().count() >= 5 {
+            if needle_qualifies(&app_name) {
                 needles.push(app_name);
             }
             for ent in app.entitlements.iter().filter_map(|e| {
@@ -105,7 +124,7 @@ impl ReversePathsSearcher {
                     Some(f)
                 }
             }) {
-                if ent.chars().count() >= 5 {
+                if needle_qualifies(&ent) {
                     needles.push(ent);
                 }
             }
@@ -114,6 +133,21 @@ impl ReversePathsSearcher {
         needles.dedup();
         bundle_needles.sort();
         bundle_needles.dedup();
+
+        // 合并正则（regex::escape 防 needle 中的正则元字符误配）—— 替代
+        // 逐 needle contains 的 O(paths × needles)；Alternation 等价于
+        // "任一 needle 是路径子串"，语义不变。needle 已 pearFormat
+        // （仅字母数字 + 小写，含中文）。
+        let needles_regex = if needles.is_empty() {
+            None
+        } else {
+            let pattern = needles
+                .iter()
+                .map(|n| regex::escape(n))
+                .collect::<Vec<_>>()
+                .join("|");
+            regex::Regex::new(&pattern).ok()
+        };
 
         let conditions = conditions::conditions();
         // 已安装应用匹配到的条件的 bundle id（预计算：原版每条路径重新遍历已装应用）
@@ -134,7 +168,7 @@ impl ReversePathsSearcher {
         ReversePathsSearcher {
             locations,
             collection: Vec::new(),
-            needles,
+            needles_regex,
             bundle_needles,
             container_uuids: build_container_uuid_map(&home),
             installed_conditions,
@@ -146,9 +180,9 @@ impl ReversePathsSearcher {
     /// 是否与已安装应用相关（ReversePathsFetch.swift:227-255）
     fn is_related_to_installed_app(&self, path: &Path, normalized_path: &str) -> bool {
         if self
-            .needles
-            .iter()
-            .any(|n| normalized_path.contains(n.as_str()))
+            .needles_regex
+            .as_ref()
+            .is_some_and(|re| re.is_match(normalized_path))
         {
             return true;
         }
@@ -339,6 +373,66 @@ mod tests {
         };
         let locations = Locations::new();
         let searcher = ReversePathsSearcher::new(locations, vec![app2]);
+        let p = Path::new("/Users/u/Library/Preferences/com.x");
+        assert!(!searcher.is_related_to_installed_app(p, &pear_format(&p.to_string_lossy())));
+    }
+
+    #[test]
+    fn test_needle_qualifies_threshold() {
+        // ASCII 短名（"QQ"）任何平台都不应成为 needle（误配面过大）
+        assert!(!needle_qualifies("qq"));
+        // ≥5 字符全平台放行
+        assert!(needle_qualifies("comexamplefooapp"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_needle_qualifies_windows_non_ascii_short_names() {
+        // Windows 无 bundle id 兜底：中文短名应用（微信/QQ 等）残留必须可匹配
+        assert!(needle_qualifies("微信"));
+        assert!(needle_qualifies("百度网盘"));
+        // 单字名仍不放行（单字符 needle 误配面过大）
+        assert!(!needle_qualifies("钉"));
+    }
+
+    #[test]
+    fn test_merged_regex_matches_any_needle() {
+        // 合并正则等价于逐 needle contains（bundle id / 应用名任一命中即相关）
+        let app = AppInfo {
+            path: PathBuf::from("/Applications/WeChat.app"),
+            bundle_identifier: "com.tencent.wechat".to_string(),
+            app_name: "WeChat".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+        let locations = Locations::new();
+        let searcher = ReversePathsSearcher::new(locations, vec![app]);
+        let re = searcher.needles_regex.as_ref().expect("应构建合并正则");
+        assert!(re.is_match("usersulibrarycontainerscomtencentwechat"));
+        assert!(re.is_match("usersulibraryapplicationsupportwechat"));
+        assert!(!re.is_match("usersulibraryapplicationsupportother"));
+    }
+
+    #[test]
+    fn test_no_needles_means_no_regex() {
+        // 无合格标识（短 ASCII 名 + 空 bundle id）→ needles_regex 为 None，
+        // is_related_to_installed_app 直接短路（不构造空 Alternation）
+        let app = AppInfo {
+            path: PathBuf::from("/Applications/X.app"),
+            bundle_identifier: "com.x".to_string(),
+            app_name: "X".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+        let locations = Locations::new();
+        let searcher = ReversePathsSearcher::new(locations, vec![app]);
+        assert!(searcher.needles_regex.is_none());
         let p = Path::new("/Users/u/Library/Preferences/com.x");
         assert!(!searcher.is_related_to_installed_app(p, &pear_format(&p.to_string_lossy())));
     }

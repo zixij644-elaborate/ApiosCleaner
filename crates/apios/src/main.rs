@@ -20,7 +20,7 @@
 //! 删除类命令都会先列出影响范围并请求确认（y/N，默认拒绝）。
 //! 脚本与 GUI 对接用 `-y` 跳过确认；`--help` 查看全部用法。
 
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
@@ -581,6 +581,14 @@ fn confirm(cli: &Cli, prompt: &str) -> bool {
     if cli.yes {
         return true;
     }
+    // 非 TTY（SSH 不转发 stdin/管道/CI）：stdin 打开但无数据时 read_line
+    // 永久阻塞（SSH 会话实测挂起）；stdin 关闭时读到 EOF 空输入静默拒绝
+    // （exit 0 误报"已放弃"）。交互确认本就要求终端 —— 直接拒绝并报错，
+    // 提示用 -y 走脚本路径，比挂起/静默通过都诚实。
+    if !io::stdin().is_terminal() {
+        eprintln!("apios: no interactive terminal — re-run with -y to proceed.");
+        exit(1);
+    }
     print!("{prompt} [y/N] ");
     let _ = io::stdout().flush();
     let mut line = String::new();
@@ -685,7 +693,12 @@ fn cmd_uninstall(cli: &Cli, arg: &str) {
         println!("Nothing to delete.");
         exit(0);
     } else {
-        eprintln!("\napios: failed to delete files (in use or protected).");
+        // 全部或部分失败：文件占用 / 受保护 / 回收站归档目录建不起来
+        // （move_to_trash_dir 在 create_dir_all 失败时把全部文件记入 failed）
+        eprintln!(
+            "\napios: failed to delete {} file(s) (in use, protected, or trash unavailable).",
+            result.failed.len()
+        );
         exit(1);
     }
 }
