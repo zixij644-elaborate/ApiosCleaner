@@ -8,10 +8,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use super::{AppMetadata, DevEnvPaths, ProcessControl, SpotlightIndex, SystemPaths, Trash};
+use super::{
+    AppDiscovery, AppMetadata, DevEnvPaths, PluginPaths, ProcessControl, SpotlightIndex,
+    SystemPaths, Trash,
+};
 use crate::dev_env::DevEnv;
 use crate::format::pear_format;
 use crate::model::{AppInfo, Sensitivity};
+use crate::plugin::PluginCategory;
 
 /// macOS 平台适配器
 pub struct MacOsAdapter {
@@ -222,6 +226,26 @@ impl SystemPaths for MacOsAdapter {
 
     fn app_support_subdirs(&self) -> Vec<String> {
         list_app_support_directories(&self.home)
+    }
+
+    fn critical_paths(&self) -> Vec<String> {
+        [
+            "/Applications",
+            "/Library",
+            "/System",
+            "/usr",
+            "/bin",
+            "/sbin",
+            "/etc",
+            "/var",
+            "/private",
+            "/opt",
+            "/Users",
+            "/Users/Shared",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
     }
 }
 
@@ -593,6 +617,138 @@ fn dev_envs_table() -> Vec<DevEnv> {
 impl DevEnvPaths for MacOsAdapter {
     fn dev_envs(&self) -> Vec<DevEnv> {
         dev_envs_table()
+    }
+}
+
+/// 插件分类路径表（原版 Locations.plugins.subcategories，18 类）。
+/// `~` 在 `plugin_categories` 中展开为 home；扫描只列一层目录（原版语义）。
+fn plugin_categories_table(home: &str) -> Vec<PluginCategory> {
+    let p = |s: &str| s.to_string();
+    vec![
+        PluginCategory {
+            name: "Audio".into(),
+            paths: vec![
+                p("~/Library/Audio/Plug-Ins/Components"),
+                p("~/Library/Audio/Plug-Ins/HAL"),
+                p("~/Library/Audio/Plug-Ins/MAS"),
+                p("~/Library/Audio/Plug-Ins/VST"),
+                p("~/Library/Audio/Plug-Ins/VST3"),
+                p("~/Library/Audio/Plug-Ins/CLAP"),
+                p("/Library/Audio/Plug-Ins/HAL"),
+                p("/Library/Audio/Plug-Ins/VST"),
+                p("/Library/Audio/Plug-Ins/VST3"),
+                p("/Library/Audio/Plug-Ins/CLAP"),
+                p("/Library/Audio/Plug-Ins/Components"),
+                p("/Library/Application Support/Avid/Audio/Plug-Ins"),
+                p("/Library/Application Support/Digidesign/Plug-Ins"),
+            ],
+        },
+        PluginCategory {
+            name: "PreferencePanes".into(),
+            paths: vec![
+                p("/Library/PreferencePanes"),
+                p("~/Library/PreferencePanes"),
+            ],
+        },
+        PluginCategory {
+            name: "QuickLook".into(),
+            paths: vec![p("/Library/QuickLook"), p("~/Library/QuickLook")],
+        },
+        PluginCategory {
+            name: "Screen Savers".into(),
+            paths: vec![p("/Library/Screen Savers"), p("~/Library/Screen Savers")],
+        },
+        PluginCategory {
+            name: "Internet Plug-Ins".into(),
+            paths: vec![
+                p("/Library/Internet Plug-Ins"),
+                p("~/Library/Internet Plug-Ins"),
+            ],
+        },
+        PluginCategory {
+            name: "Core Image".into(),
+            paths: vec![p("/Library/CoreImage"), p("~/Library/CoreImage")],
+        },
+        PluginCategory {
+            name: "ColorPickers".into(),
+            paths: vec![p("/Library/ColorPickers"), p("~/Library/ColorPickers")],
+        },
+        PluginCategory {
+            name: "Fonts".into(),
+            paths: vec![p("~/Library/Fonts")],
+        },
+        PluginCategory {
+            name: "Dictionaries".into(),
+            paths: vec![p("/Library/Dictionaries"), p("~/Library/Dictionaries")],
+        },
+        PluginCategory {
+            name: "Automator".into(),
+            paths: vec![p("/Library/Automator"), p("~/Library/Automator")],
+        },
+        PluginCategory {
+            name: "Safari Extensions".into(),
+            paths: vec![
+                p("/Library/Safari/Extensions"),
+                p("~/Library/Safari/Extensions"),
+            ],
+        },
+        PluginCategory {
+            name: "Motion Templates".into(),
+            paths: vec![
+                p("~/Movies/Motion Templates"),
+                p("/Library/Application Support/Final Cut Pro System Support/Plug-ins"),
+            ],
+        },
+        PluginCategory {
+            name: "Spotlight".into(),
+            paths: vec![p("/Library/Spotlight"), p("~/Library/Spotlight")],
+        },
+        PluginCategory {
+            name: "Services".into(),
+            paths: vec![p("/Library/Services"), p("~/Library/Services")],
+        },
+        PluginCategory {
+            name: "Address Book".into(),
+            paths: vec![p("~/Library/Address Book Plug-Ins")],
+        },
+        PluginCategory {
+            name: "Contextual Menu".into(),
+            paths: vec![
+                p("/Library/Contextual Menu Items"),
+                p("~/Library/Contextual Menu Items"),
+            ],
+        },
+        PluginCategory {
+            name: "Input Methods".into(),
+            paths: vec![p("/Library/Input Methods"), p("~/Library/Input Methods")],
+        },
+        PluginCategory {
+            name: "Widgets".into(),
+            paths: vec![p("/Library/Widgets"), p("~/Library/Widgets")],
+        },
+    ]
+    .into_iter()
+    .map(|mut c| {
+        c.paths = c
+            .paths
+            .iter()
+            .map(|path| crate::dev_env::expand_home(path, home))
+            .collect();
+        c
+    })
+    .collect()
+}
+
+impl PluginPaths for MacOsAdapter {
+    fn plugin_categories(&self) -> Vec<PluginCategory> {
+        plugin_categories_table(&self.home)
+    }
+}
+
+impl AppDiscovery for MacOsAdapter {
+    /// 委托 scan.rs 的 .app 目录 walk（行为与旧 get_sorted_apps 调用点完全一致）
+    fn discover_installed_apps(&self) -> Vec<AppInfo> {
+        crate::scan::get_sorted_apps(&crate::scan::default_app_folders(&self.home))
     }
 }
 

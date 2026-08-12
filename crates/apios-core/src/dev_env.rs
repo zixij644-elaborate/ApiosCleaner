@@ -245,12 +245,19 @@ mod tests {
 
     #[test]
     fn test_find_env_case_insensitive() {
-        let env = find_env("xcode").expect("xcode");
-        assert_eq!(env.name, "Xcode");
-        assert!(env.paths.iter().any(|p| p.contains("DerivedData")));
+        // 平台无关：Cargo 在 macOS/Linux/Windows 三张表都有（Xcode 仅 macOS 表）
+        let env = find_env("cargo").expect("cargo");
+        assert_eq!(env.name, "Cargo");
 
+        // "all" 等于全部环境的路径合并（与平台表规模无关，逐元素精确比对）
         let all = find_env("all").expect("all");
-        assert!(all.paths.len() > 30); // 全部环境路径合并
+        let combined: Vec<_> = crate::platform::adapter()
+            .dev_envs()
+            .into_iter()
+            .flat_map(|e| e.paths)
+            .collect();
+        assert_eq!(all.paths, combined);
+        assert!(!all.paths.is_empty()); // 三平台表均非空
     }
 
     #[test]

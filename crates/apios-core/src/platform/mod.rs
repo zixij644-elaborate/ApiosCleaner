@@ -37,6 +37,10 @@ pub trait SystemPaths {
     fn reverse_paths(&self) -> Vec<String>;
     /// 应用支持目录下的子目录列表（深度搜索）
     fn app_support_subdirs(&self) -> Vec<String>;
+    /// 系统保护区根目录（trash.rs::validate_path 用）。不含用户主目录 —— 主目录
+    /// 由 validate_path 统一用 home() 比较。Windows 环境变量驱动（防非 C: 系统），
+    /// POSIX 静态表。表中只列目录根，其子路径仍是合法删除目标。
+    fn critical_paths(&self) -> Vec<String>;
 }
 
 /// 应用元数据提取（每平台机制不同：macOS codesign / Linux desktop 文件 / Windows 注册表）
@@ -49,7 +53,18 @@ pub trait AppMetadata {
 
 /// 回收站语义（macOS ~/.Trash / Linux XDG trash / Windows 回收站）
 pub trait Trash {
+    /// POSIX 归档目录（Windows 回收站无目录模型，恒不用）
     fn trash_dir(&self) -> PathBuf;
+
+    /// 动作级：把文件移入回收站。默认实现 = POSIX 归档式（move_to_trash_dir，
+    /// 归档目录/重名 -N/跨卷 copy 回退）；Windows 覆写走 SHFileOperationW。
+    fn move_to_trash(
+        &self,
+        urls: &[PathBuf],
+        bundle_name: Option<&str>,
+    ) -> crate::trash::DeleteResult {
+        crate::trash::move_to_trash_dir(urls, bundle_name, self.trash_dir())
+    }
 }
 
 /// 卸载前终止运行中的应用（原版 GUI 的 killApp；每平台机制不同：
@@ -92,6 +107,18 @@ pub trait PackageManager {
     fn autoremove(&self) -> Result<(), String>;
 }
 
+/// 插件分类路径表（`plugins` 命令用；原版 Locations.plugins.subcategories）。
+/// macOS 18 个分类全表；其他平台暂无可移植的等价目录结构，返回空。
+pub trait PluginPaths {
+    fn plugin_categories(&self) -> Vec<crate::plugin::PluginCategory>;
+}
+
+/// 已安装应用发现（每平台机制不同：macOS walk .app / Windows 注册表卸载项 + 开始菜单 /
+/// Linux desktop 文件——TODO）。scan.rs 的 walk 逻辑保留给 macOS/Fallback 实现复用。
+pub trait AppDiscovery {
+    fn discover_installed_apps(&self) -> Vec<AppInfo>;
+}
+
 /// 适配器暴露本平台支持的包管理器（多包管理器入口）
 pub trait PackageManagers {
     fn package_managers(&self) -> Vec<Box<dyn PackageManager>>;
@@ -104,17 +131,29 @@ pub trait PackageManagers {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod fallback;
 #[cfg(target_os = "macos")]
 mod homebrew;
 #[cfg(target_os = "macos")]
+pub mod lipo;
+#[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
+mod win_registry;
+#[cfg(target_os = "windows")]
+mod win_trash;
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+mod winget;
 
 /// 当前平台的适配器类型（cfg 编译期选择）
 #[cfg(target_os = "macos")]
 pub type Adapter = macos::MacOsAdapter;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub type Adapter = windows::WindowsAdapter;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub type Adapter = fallback::FallbackAdapter;
 
 /// 当前平台的适配器实例

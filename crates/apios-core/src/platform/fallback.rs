@@ -9,11 +9,12 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    AppMetadata, DevEnvPaths, PackageManager, PackageManagers, ProcessControl, SpotlightIndex,
-    SystemPaths, Trash,
+    AppDiscovery, AppMetadata, DevEnvPaths, PackageManager, PackageManagers, PluginPaths,
+    ProcessControl, SpotlightIndex, SystemPaths, Trash,
 };
 use crate::dev_env::DevEnv;
 use crate::model::{AppInfo, Sensitivity};
+use crate::plugin::PluginCategory;
 
 /// 非 macOS 平台的基础适配器（当前按 Linux XDG 约定提供默认值）
 pub struct FallbackAdapter {
@@ -79,6 +80,18 @@ impl SystemPaths for FallbackAdapter {
     /// 未细化：平台适配 TODO（Linux 可扫 ~/.local/share/ 下的供应商目录）
     fn app_support_subdirs(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Linux 系统保护区（对齐 macOS 精神；~/.local/share 等用户目录根不整体保护，
+    /// 只有 {home}/Applications 由 validate_path 的 POSIX 分支额外拦截）
+    fn critical_paths(&self) -> Vec<String> {
+        [
+            "/bin", "/boot", "/dev", "/etc", "/lib", "/opt", "/proc", "/root", "/run", "/sbin",
+            "/snap", "/srv", "/sys", "/usr", "/var",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
     }
 }
 
@@ -214,6 +227,20 @@ fn dev_envs_table() -> Vec<DevEnv> {
 impl DevEnvPaths for FallbackAdapter {
     fn dev_envs(&self) -> Vec<DevEnv> {
         dev_envs_table()
+    }
+}
+
+impl PluginPaths for FallbackAdapter {
+    fn plugin_categories(&self) -> Vec<PluginCategory> {
+        vec![] // 其他平台暂无 macOS 式插件目录体系，返回空
+    }
+}
+
+impl AppDiscovery for FallbackAdapter {
+    /// 委托 scan.rs 的 .app 目录 walk（Linux XDG 目录，通常为空；
+    /// desktop 文件解析属平台专业适配 TODO）
+    fn discover_installed_apps(&self) -> Vec<AppInfo> {
+        crate::scan::get_sorted_apps(&crate::scan::default_app_folders(&self.home))
     }
 }
 

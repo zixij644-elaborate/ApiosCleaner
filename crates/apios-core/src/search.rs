@@ -12,7 +12,7 @@ use crate::identifiers::CachedIdentifiers;
 use crate::locations::{standard_library_subdirectories, Locations};
 use crate::matcher::{should_skip_item, specific_condition};
 use crate::model::{AppInfo, Condition, Sensitivity, SkipCondition};
-use crate::platform::SpotlightIndex;
+use crate::platform::{SpotlightIndex, SystemPaths};
 
 pub struct AppPathFinder<'a> {
     pub app: &'a AppInfo,
@@ -84,13 +84,13 @@ impl<'a> AppPathFinder<'a> {
     /// 原版 group container 用 FileManager.containerURL(forSecurityApplicationGroupIdentifier:)
     /// （ObjC API，以目标 app 的 bundle ID 调用，绝大多数返回 nil）—— PoC 先跳过，只做 UUID 容器扫描。
     fn get_all_containers(&self) -> Vec<PathBuf> {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::platform::adapter().home();
         app_info::get_app_containers(&home, &self.app.bundle_identifier)
     }
 
     /// 判断位置是否为 Library 根（深度 2 搜索 + skipDeepSearch 生效范围）
     fn is_library_directory(location: &str) -> bool {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::platform::adapter().home();
         location == format!("{home}/Library") || location == "/Library"
     }
 
@@ -406,10 +406,11 @@ mod tests {
             .collect();
 
         // 深度2 匹配项是 lulu-data.bin，父目录 HelperTools 非标准 → 应记录 HelperTools
+        // （组件匹配而非字符串 ends_with：Windows 分隔符是反斜杠）
         assert!(
             paths
                 .iter()
-                .any(|p| p.ends_with("Objective-See/HelperTools")),
+                .any(|p| Path::new(p).ends_with(Path::new("Objective-See/HelperTools"))),
             "应回退到供应商目录: {paths:?}"
         );
         assert!(
@@ -440,7 +441,7 @@ mod tests {
         assert!(
             paths
                 .iter()
-                .any(|p| p.ends_with("Application Support/lulu-data.bin")),
+                .any(|p| Path::new(p).ends_with(Path::new("Application Support/lulu-data.bin"))),
             "标准子目录下应记录文件本身: {paths:?}"
         );
     }

@@ -7,8 +7,10 @@
 //!   apios clean-orphan       删除全部孤儿文件（交互确认）
 //!   apios dev-clean [env]    列出开发环境缓存；带 <env> 则清理（交互确认）
 //!   apios pkg <pm> <action>  包管理器：卸载包本体 + 依赖处理（brew 为当前实现）
-//!   apios lipo [app]         扫描通用（fat）二进制，显示可省空间（只读）
-//!   apios lipo thin <app>    瘦身为当前架构（交互确认；--sign 可选 ad-hoc 重签）
+//!   apios plugins [类别]     列出插件（18 类：音频/偏好面板/QuickLook 等）
+//!   apios plugins --clean    清理插件（交互确认；可指定类别，如 --clean audio）
+//!   apios lipo [app]         扫描通用（fat）二进制，显示可省空间（只读；macOS 专属）
+//!   apios lipo thin <app>    瘦身为当前架构（交互确认；--sign 可选 ad-hoc 重签；macOS 专属）
 //!
 //! <app> 参数支持三种形式：
 //!   完整路径      apios uninstall /Applications/Foo.app
@@ -22,18 +24,56 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
+#[cfg(not(target_os = "windows"))]
 use apios_core::app_info::get_app_info;
 use apios_core::dev_env::{dedup_nested, dir_size, env_sizes, expand_globs, expand_home, find_env};
-use apios_core::lipo::{self, cpu_name, current_cputype, select_runnable_slice, FatFile};
 use apios_core::locations::Locations;
 use apios_core::model::{AppInfo, Sensitivity};
 use apios_core::orphan::ReversePathsSearcher;
 use apios_core::pkg::{detect_kind, PkgKind};
-use apios_core::platform::{PackageManager, PackageManagers, ProcessControl, SystemPaths};
-use apios_core::scan::{default_app_folders, get_sorted_apps};
+#[cfg(target_os = "macos")]
+use apios_core::platform::lipo::{self, cpu_name, current_cputype, select_runnable_slice, FatFile};
+use apios_core::platform::{
+    AppDiscovery, PackageManager, PackageManagers, PluginPaths, ProcessControl, SystemPaths,
+};
+use apios_core::plugin::{group_by_category, scan_plugins, PluginCategory};
+use apios_core::scan::default_app_folders;
+#[cfg(target_os = "windows")]
+use apios_core::scan::find_app_by_path;
+#[cfg(target_os = "macos")]
+use apios_core::scan::get_sorted_apps;
 use apios_core::search::AppPathFinder;
 use apios_core::trash::{delete_files, is_writable};
 use clap::{Parser, Subcommand};
+
+/// 回收站文案（Windows 无 Trash 归档目录概念，系统回收站叫 Recycle Bin）
+fn trash_label() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Recycle Bin"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "Trash"
+    }
+}
+
+/// 删除完成消息（Windows 回收站内路径不可知，不打印归档目录）
+fn deleted_message(count: usize, bundle_folder: &std::path::Path) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = bundle_folder;
+        format!("Deleted {count} files to {}", trash_label())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        format!(
+            "Deleted {count} files to {} ({})",
+            trash_label(),
+            bundle_folder.display()
+        )
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -77,7 +117,18 @@ enum Command {
         #[command(subcommand)]
         action: PkgAction,
     },
+    /// Scan and clean plugin directories (audio, preference panes, quick look, ...)
+    Plugins {
+        /// Category name to show (case-insensitive); omit for all
+        category: Option<String>,
+        /// Delete the listed plugins instead of just listing (asks for confirmation).
+        /// Optional category name; omit for all
+        #[arg(long, num_args = 0..=1, default_missing_value = "all")]
+        clean: Option<String>,
+    },
     /// Scan apps for universal (fat) binaries; thin them to the current architecture
+    /// (macOS only: universal binaries are a Darwin format)
+    #[cfg(target_os = "macos")]
     Lipo {
         /// App path or name to scan; omit to scan all apps in the default folders
         app: Option<String>,
@@ -103,6 +154,7 @@ enum PkgAction {
     Autoremove,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 enum LipoAction {
     /// Thin universal binaries in an app to the current architecture (irreversible)
@@ -115,7 +167,21 @@ enum LipoAction {
     },
 }
 
+/// 旧版 Windows 控制台默认代码页（GBK 936 / 437）无法输出 UTF-8 中文 →
+/// 启动时切换到 65001（UTF-8）。kernel32 手写 FFI，零依赖。
+#[cfg(target_os = "windows")]
+fn set_console_utf8() {
+    extern "system" {
+        fn SetConsoleOutputCP(cp: u32) -> i32;
+    }
+    unsafe {
+        SetConsoleOutputCP(65001);
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "windows")]
+    set_console_utf8();
     let cli = Cli::parse();
     match cli.command {
         Command::List { ref app } => cmd_list(&cli, app),
@@ -124,6 +190,11 @@ fn main() {
         Command::CleanOrphan => cmd_clean_orphan(&cli),
         Command::DevClean { ref env } => cmd_dev_clean(&cli, env.as_deref()),
         Command::Pkg { ref pm, ref action } => cmd_pkg(&cli, pm, action),
+        Command::Plugins {
+            ref category,
+            ref clean,
+        } => cmd_plugins(&cli, category.as_deref(), clean.as_deref()),
+        #[cfg(target_os = "macos")]
         Command::Lipo {
             ref app,
             ref action,
@@ -136,32 +207,53 @@ fn main() {
 /// 参数是路径形式（含目录分隔或带 .app 后缀）？
 /// 注意：不含 `Path::exists()` —— 裸名（如 "Firefox"）若碰巧在 cwd 有同名文件会被劫持
 /// 成路径，绕过应用名查找。裸名一律走 `find_app_by_name`。
+/// Windows：反斜杠分隔与盘符（`C:\...`，限定 `X:` 形态避免误伤含 ':' 的 POSIX 名）。
 fn arg_is_path(arg: &str) -> bool {
-    arg.contains('/') || arg.to_ascii_lowercase().ends_with(".app")
+    let b = arg.as_bytes();
+    // 盘符形态：`C:` 或 `C:\...`（首字符字母 + 冒号 + 反斜杠/结尾）
+    let drive = b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b.len() == 2 || b[2] == b'\\');
+    arg.contains('/') || arg.contains('\\') || drive || arg.to_ascii_lowercase().ends_with(".app")
 }
 
-/// 在默认应用目录中按名称查找 <name>.app（先精确匹配，再大小写不敏感）
+/// 按名称查找应用 → 路径。
+/// macOS/Linux：在默认应用目录中查找 <name>.app（先精确匹配，再大小写不敏感）；
+/// Windows：无 .app 概念 —— 从发现结果（注册表 DisplayName / 开始菜单名）匹配。
 fn find_app_by_name(name: &str, folders: &[String]) -> Option<PathBuf> {
-    let exact = format!("{name}.app");
-    for folder in folders {
-        let candidate = Path::new(folder).join(&exact);
-        if candidate.exists() {
-            return Some(candidate);
-        }
+    #[cfg(windows)]
+    {
+        let _ = folders;
+        let apps = apios_core::platform::adapter().discover_installed_apps();
+        let lower = name.to_lowercase();
+        apps.into_iter()
+            .find(|a| a.app_name.to_lowercase() == lower)
+            .map(|a| a.path)
     }
-    // 大小写不敏感兜底（用户输入 "edge" 命中 "Microsoft Edge.app"）
-    let lower = exact.to_lowercase();
-    for folder in folders {
-        if let Ok(entries) = std::fs::read_dir(folder) {
-            for entry in entries.flatten() {
-                let file_name = entry.file_name().to_string_lossy().to_lowercase();
-                if file_name == lower {
-                    return Some(entry.path());
+    #[cfg(not(windows))]
+    {
+        let exact = format!("{name}.app");
+        for folder in folders {
+            let candidate = Path::new(folder).join(&exact);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        // 大小写不敏感兜底（用户输入 "edge" 命中 "Microsoft Edge.app"）
+        let lower = exact.to_lowercase();
+        for folder in folders {
+            if let Ok(entries) = std::fs::read_dir(folder) {
+                for entry in entries.flatten() {
+                    let file_name = entry.file_name().to_string_lossy().to_lowercase();
+                    if file_name == lower {
+                        return Some(entry.path());
+                    }
                 }
             }
         }
+        None
     }
-    None
 }
 
 /// 解析 <app> 参数 → 应用 bundle 路径；失败时打印用法并退出 1
@@ -202,15 +294,42 @@ fn resolve_app_or_exit(arg: &str) -> PathBuf {
 }
 
 /// 获取 AppInfo，失败时打印错误并退出 1
+///
+/// Windows：无 Info.plist —— 从发现结果（注册表卸载项/开始菜单）按路径匹配；
+/// 未注册的应用（便携版）按目录名构造最小 AppInfo（bundle 空，降级匹配生效）。
 fn get_app_info_or_exit(path: &Path) -> AppInfo {
-    match get_app_info(path) {
-        Some(app) => app,
-        None => {
-            eprintln!(
-                "apios: unable to fetch app info at path: {}",
-                path.display()
-            );
-            exit(1);
+    #[cfg(windows)]
+    {
+        let apps = apios_core::platform::adapter().discover_installed_apps();
+        if let Some(app) = find_app_by_path(path, &apps) {
+            return app;
+        }
+        let app_name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".to_string());
+        return AppInfo {
+            path: path.to_path_buf(),
+            bundle_identifier: String::new(),
+            app_name,
+            entitlements: Vec::new(),
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+    }
+    #[cfg(not(windows))]
+    {
+        match get_app_info(path) {
+            Some(app) => app,
+            None => {
+                eprintln!(
+                    "apios: unable to fetch app info at path: {}",
+                    path.display()
+                );
+                exit(1);
+            }
         }
     }
 }
@@ -289,7 +408,11 @@ fn cmd_uninstall(cli: &Cli, arg: &str) {
     check_protected(&found, &format!("apios uninstall {}", arg));
 
     println!("{} ({})", app.app_name, app.bundle_identifier);
-    println!("{} related files will be moved to Trash:", found.len());
+    println!(
+        "{} related files will be moved to {}:",
+        found.len(),
+        trash_label()
+    );
     for p in &found {
         println!("  {}", p.display());
     }
@@ -307,9 +430,8 @@ fn cmd_uninstall(cli: &Cli, arg: &str) {
     let result = delete_files(&found, Some(&app.app_name));
     if result.success {
         println!(
-            "\nDeleted {} files to Trash ({})",
-            result.moved.len(),
-            result.bundle_folder.display()
+            "\n{}",
+            deleted_message(result.moved.len(), &result.bundle_folder)
         );
         if !result.failed.is_empty() {
             eprintln!(
@@ -400,9 +522,8 @@ fn cmd_dev_clean(cli: &Cli, env: Option<&str>) {
     let result = delete_files(&contents, Some(&format!("Development - {}", env.name)));
     if result.success {
         println!(
-            "\nDeleted {} files to Trash ({})",
-            result.moved.len(),
-            result.bundle_folder.display()
+            "\n{}",
+            deleted_message(result.moved.len(), &result.bundle_folder)
         );
         if !result.failed.is_empty() {
             eprintln!(
@@ -611,8 +732,123 @@ fn cmd_pkg_autoremove(cli: &Cli, pm: &dyn PackageManager) {
     println!("Autoremoved {} package(s).", orphans.len());
 }
 
+// ---------- 插件（PluginsView 移植） ----------
+
+/// 分类选择：null/"all" → 全部分类；否则大小写不敏感匹配单个分类
+fn resolve_plugin_categories(
+    categories: &[PluginCategory],
+    arg: Option<&str>,
+) -> Vec<PluginCategory> {
+    let Some(arg) = arg else {
+        return categories.to_vec();
+    };
+    if arg.eq_ignore_ascii_case("all") {
+        return categories.to_vec();
+    }
+    match categories.iter().find(|c| c.name.eq_ignore_ascii_case(arg)) {
+        Some(c) => vec![c.clone()],
+        None => {
+            eprintln!("apios: unknown plugin category \"{arg}\"");
+            let names: Vec<&str> = categories.iter().map(|c| c.name.as_str()).collect();
+            eprintln!("available: {}", names.join(", "));
+            exit(1);
+        }
+    }
+}
+
+/// 路径截断显示（长路径中间省略，对齐 lipo 惯例）
+fn truncated(path: &Path, max: usize) -> String {
+    let s = path.display().to_string();
+    if s.chars().count() <= max {
+        return s;
+    }
+    let keep = max / 2 - 1;
+    let head: String = s.chars().take(keep).collect();
+    let tail: String = s.chars().skip(s.chars().count() - keep).collect();
+    format!("{head}…{tail}")
+}
+
+fn cmd_plugins(cli: &Cli, category: Option<&str>, clean: Option<&str>) {
+    let categories = apios_core::platform::adapter().plugin_categories();
+    // --clean 有值 → 删除模式（目标 = clean 值）；否则列出（目标 = category 值）
+    let target = resolve_plugin_categories(&categories, clean.or(category));
+    let grouped = group_by_category(scan_plugins(&target));
+    let count: usize = grouped.iter().map(|(_, list)| list.len()).sum();
+    let total: u64 = grouped
+        .iter()
+        .flat_map(|(_, list)| list)
+        .map(|p| p.size)
+        .sum();
+
+    if clean.is_some() {
+        if count == 0 {
+            println!("Nothing to delete.");
+            return;
+        }
+        for (cat, list) in &grouped {
+            let cat_total: u64 = list.iter().map(|p| p.size).sum();
+            println!("{cat} ({}, {})", list.len(), fmt_size(cat_total));
+            for p in list {
+                println!("  {}  {}", truncated(&p.path, 64), fmt_size(p.size));
+            }
+        }
+        if !confirm(
+            cli,
+            &format!(
+                "\nDelete {count} plugin(s) — {}? (moved to {})",
+                fmt_size(total),
+                trash_label()
+            ),
+        ) {
+            println!("Aborted — nothing was deleted.");
+            return;
+        }
+        let paths: Vec<PathBuf> = grouped
+            .iter()
+            .flat_map(|(_, list)| list)
+            .map(|p| p.path.clone())
+            .collect();
+        let result = delete_files(&paths, Some(&format!("Plugins ({count} items)")));
+        if result.success {
+            println!(
+                "\n{}",
+                deleted_message(result.moved.len(), &result.bundle_folder)
+            );
+        }
+        if !result.failed.is_empty() {
+            eprintln!("apios: {} file(s) could not be moved", result.failed.len());
+            exit(1);
+        }
+        return;
+    }
+
+    // 只读列出
+    if count == 0 {
+        println!("No plugins found.");
+        return;
+    }
+    for (cat, list) in &grouped {
+        let cat_total: u64 = list.iter().map(|p| p.size).sum();
+        println!("{cat} ({}, {})", list.len(), fmt_size(cat_total));
+        for p in list {
+            println!("  {}  {}", truncated(&p.path, 64), fmt_size(p.size));
+        }
+    }
+    println!(
+        "\n{} plugin(s) across {} categories — {}.",
+        count,
+        grouped.len(),
+        fmt_size(total)
+    );
+    println!(
+        "Run `apios plugins --clean [category]` to delete them (moved to {}).",
+        trash_label()
+    );
+}
+
 // ---------- Lipo（fat 瘦身） ----------
 
+#[cfg(target_os = "macos")]
 fn cmd_lipo(cli: &Cli, app: Option<&str>, action: Option<&LipoAction>) {
     match action {
         Some(LipoAction::Thin { app, sign }) => cmd_lipo_thin(cli, app, *sign),
@@ -622,11 +858,13 @@ fn cmd_lipo(cli: &Cli, app: Option<&str>, action: Option<&LipoAction>) {
 
 /// 目标切片（当前架构 + CPU 能力过滤：x86_64h 仅在有 AVX2 时可选）；
 /// 当前架构不在文件内 → None（跳过该文件）
-fn keep_slice(fat: &FatFile) -> Option<&apios_core::lipo::FatSlice> {
+#[cfg(target_os = "macos")]
+fn keep_slice(fat: &FatFile) -> Option<&apios_core::platform::lipo::FatSlice> {
     select_runnable_slice(&fat.slices, current_cputype())
 }
 
 /// 切片描述："arm64 (52.3 MB) · x86_64 (48.1 MB)"
+#[cfg(target_os = "macos")]
 fn describe_slices(fat: &FatFile) -> String {
     fat.slices
         .iter()
@@ -642,6 +880,7 @@ fn describe_slices(fat: &FatFile) -> String {
 }
 
 /// 相对路径显示，超长截断（避免 Qt 插件式长路径把列宽撑爆）
+#[cfg(target_os = "macos")]
 fn truncated_rel(path: &Path, bundle: &Path, max: usize) -> String {
     let rel = path
         .strip_prefix(bundle)
@@ -658,6 +897,7 @@ fn truncated_rel(path: &Path, bundle: &Path, max: usize) -> String {
 }
 
 /// 打印单个 app 的 fat 二进制明细；返回（可省总量, fat 二进制数）
+#[cfg(target_os = "macos")]
 fn print_app_binaries(bundle: &Path, bins: &[(std::path::PathBuf, FatFile)]) -> (u64, usize) {
     const MAX_PATH: usize = 64;
     let width = bins
@@ -688,6 +928,7 @@ fn print_app_binaries(bundle: &Path, bins: &[(std::path::PathBuf, FatFile)]) -> 
 }
 
 /// 扫描：`apios lipo`（全部应用）或 `apios lipo <app>`（只读）
+#[cfg(target_os = "macos")]
 fn cmd_lipo_scan(cli: &Cli, app: Option<&str>) {
     let _ = cli;
     if let Some(arg) = app {
@@ -740,6 +981,7 @@ fn cmd_lipo_scan(cli: &Cli, app: Option<&str>) {
 }
 
 /// 瘦身：`apios lipo thin <app> [--sign]`（破坏性，交互确认）
+#[cfg(target_os = "macos")]
 fn cmd_lipo_thin(cli: &Cli, arg: &str, sign: bool) {
     let bundle = resolve_app_or_exit(arg);
     let app_name = bundle
@@ -753,7 +995,7 @@ fn cmd_lipo_thin(cli: &Cli, arg: &str, sign: bool) {
     let plan: Vec<(
         &std::path::PathBuf,
         &FatFile,
-        &apios_core::lipo::FatSlice,
+        &apios_core::platform::lipo::FatSlice,
         u64,
     )> = bins
         .iter()
@@ -858,9 +1100,9 @@ fn fmt_size(bytes: u64) -> String {
 }
 
 fn find_orphans() -> Vec<PathBuf> {
-    let home = apios_core::platform::adapter().home();
     let locations = Locations::new();
-    let apps = get_sorted_apps(&default_app_folders(&home));
+    // 平台化发现：macOS/Linux 内部即旧 walk（行为等价），Windows 走注册表+开始菜单
+    let apps = apios_core::platform::adapter().discover_installed_apps();
     let mut searcher = ReversePathsSearcher::new(locations, apps);
     searcher.reverse_paths_search_cli()
 }
@@ -885,7 +1127,11 @@ fn cmd_clean_orphan(cli: &Cli) {
 
     check_protected(&found, "apios clean-orphan");
 
-    println!("{} orphaned files will be moved to Trash:", found.len());
+    println!(
+        "{} orphaned files will be moved to {}:",
+        found.len(),
+        trash_label()
+    );
     if !confirm(cli, &format!("Delete {} files? ", found.len())) {
         println!("Aborted — nothing was deleted.");
         return;
@@ -894,9 +1140,8 @@ fn cmd_clean_orphan(cli: &Cli) {
     let result = delete_files(&found, Some("Orphaned"));
     if result.success {
         println!(
-            "\nDeleted {} files to Trash ({})",
-            result.moved.len(),
-            result.bundle_folder.display()
+            "\n{}",
+            deleted_message(result.moved.len(), &result.bundle_folder)
         );
         if !result.failed.is_empty() {
             eprintln!(
@@ -927,12 +1172,17 @@ mod tests {
         assert!(arg_is_path("~/Downloads/Foo.app"));
         assert!(!arg_is_path("Foo"));
         assert!(!arg_is_path("Microsoft Edge"));
+        // Windows 形态（跨平台断言：POSIX 上同样判定为路径，无副作用）
+        assert!(arg_is_path(r"C:\Users\foo\Foo.exe"));
+        assert!(arg_is_path(r".\Foo.exe"));
+        assert!(arg_is_path("C:\\Program Files\\Foo"));
+        assert!(!arg_is_path("C:colon-name")); // 非盘符形态（首字符后不是 :）
     }
 
     #[test]
     fn test_find_app_by_name_not_found() {
         // 不可能存在的应用名 → None
-        let folders = default_app_folders(&std::env::var("HOME").unwrap_or_default());
+        let folders = default_app_folders(&apios_core::platform::adapter().home());
         assert!(find_app_by_name("nonexistent-app-zzz-xyz", &folders).is_none());
     }
 

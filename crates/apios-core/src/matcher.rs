@@ -71,6 +71,9 @@ pub fn specific_condition(
     }
 
     // --- Steam 游戏主目录 ---
+    // 路径为 macOS 形态（Steam macOS 安装位于 ~/Library/Application Support/Steam）；
+    // app.steam 仅 macOS 扫描置真，Windows/Linux 上此块与下方 appmanifest 块恒不命中。
+    // 平台相关路径的数据表外部化（路线图阶段五）时一并处理。
     if app.steam && path_str.contains("/Library/Application Support/Steam/steamapps/common/") {
         let folder_name = pear_format(&path.file_name().unwrap_or_default().to_string_lossy());
         if folder_name == ids.formatted_app_name || folder_name == ids.app_name_letters_only {
@@ -231,6 +234,7 @@ mod tests {
     use crate::conditions;
     use crate::identifiers::CachedIdentifiers;
     use crate::model::{AppInfo, Condition};
+    use crate::platform::SystemPaths;
     use std::path::PathBuf;
 
     fn make_app(bundle_id: &str, name: &str) -> (AppInfo, CachedIdentifiers) {
@@ -387,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_should_skip_trash() {
-        let home = std::env::var("HOME").unwrap();
+        let home = crate::platform::adapter().home();
         let collection = HashSet::new();
         let skip = conditions::skip_conditions();
         // ~/.Trash 下的任何路径都跳过
