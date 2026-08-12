@@ -3,7 +3,12 @@ name = "apios-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Pearcleaner 核心引擎：应用相关文件扫描/匹配/回收站逻辑（Rust 重写）"
+description = "ApiosCleaner engine: portable Rust core for app file scanning, matching, orphan detection, trash semantics, and Mach-O fat-binary parsing"
+repository.workspace = true
+readme.workspace = true
+homepage.workspace = true
+keywords = ["cleaner", "macos", "app", "scanning", "mach-o"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 walkdir = "2"

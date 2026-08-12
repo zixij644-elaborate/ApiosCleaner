@@ -135,5 +135,6 @@ apios lipo thin --sign Firefox
 
 The initial codebase was derived from [Pearcleaner](https://github.com/alienator88/Pearcleaner)
 by alienator88, licensed under the **Apache License 2.0 with the Commons Clause
-License Condition v1.0**. This project is distributed under the **same license**,
-including the prohibition on selling the Software. See [LICENSE.md](LICENSE.md).
+License Condition v1.0**. This project is distributed under the **same
+license**, including the prohibition on selling the Software. The full license
+text (Commons Clause condition and Apache License 2.0) is in [LICENSE](LICENSE).

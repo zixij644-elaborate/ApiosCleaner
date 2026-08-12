@@ -3,7 +3,12 @@ name = "apios"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "ApiosCleaner 命令行工具（命令参数式）"
+description = "ApiosCleaner CLI: app cleaner with related-file search, orphan cleanup, dev-cache cleaning, Homebrew package management, and universal-binary thinning"
+repository.workspace = true
+readme.workspace = true
+homepage.workspace = true
+keywords = ["cleaner", "macos", "app", "trash", "lipo"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 apios-core = { path = "../apios-core" }
