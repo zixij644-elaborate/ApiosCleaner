@@ -109,6 +109,8 @@ mod fallback;
 #[cfg(target_os = "macos")]
 mod homebrew;
 #[cfg(target_os = "macos")]
+pub mod lipo;
+#[cfg(target_os = "macos")]
 mod macos;
 
 /// 当前平台的适配器类型（cfg 编译期选择）

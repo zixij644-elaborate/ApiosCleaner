@@ -19,7 +19,6 @@ flowchart TB
             SEARCH["search.rs<br/>related-file discovery"]
             ORPHAN["orphan.rs<br/>orphan detection"]
             TRASH["trash.rs<br/>trash semantics + path safety"]
-            LIPO["lipo.rs<br/>universal-binary thinning"]
             PKG["pkg.rs<br/>package-manager abstraction"]
             DEVENV["dev_env.rs<br/>dev-cache cleanup"]
         end
@@ -27,7 +26,7 @@ flowchart TB
         subgraph ADAPTER["platform adapter — trait + cfg(target_os)"]
             direction LR
             TRAITS["traits<br/><br/>SystemPaths · AppMetadata · Trash<br/>SpotlightIndex · ProcessControl<br/>DevEnvPaths · PackageManagers"]
-            MAC["macOS impl<br/><br/>macos.rs<br/>homebrew.rs"]
+            MAC["macOS impl<br/><br/>macos.rs · homebrew.rs<br/>lipo.rs — universal-binary thinning<br/>cfg(macos) only: Darwin format"]
             FB["fallback impl<br/><br/>fallback.rs<br/>XDG defaults"]
         end
     end
@@ -42,7 +41,7 @@ flowchart TB
 
 | Crate | Role |
 |---|---|
-| `apios-core` | The engine: file discovery, name matching, orphan detection, trash semantics, Mach-O fat parsing, package-manager abstraction. Cross-platform (type-checks on Linux/Windows with zero changes). |
+| `apios-core` | The engine: file discovery, name matching, orphan detection, trash semantics, package-manager abstraction. Cross-platform (type-checks on Linux/Windows with zero changes); macOS-only modules (universal-binary thinning) live in the platform layer behind `cfg(target_os)` gates. |
 | `apios` | The CLI. Arg parsing (clap), confirmation flow, error formatting (`apios: …` + exit 1), reporting. Depends only on `apios-core`. |
 
 ## Platform adapter pattern
@@ -81,7 +80,6 @@ The macOS implementation is further split:
 | `orphan.rs` | Detect files left behind by uninstalled apps (prebuilt UUID→bundle-id map) |
 | `identifiers.rs` | Cached bundle-identifier extraction + normalized-name helpers |
 | `trash.rs` | Move-to-Trash archive semantics + critical-path validation + undo (restore) |
-| `lipo.rs` | Universal-binary parsing (fat32/fat64), architecture selection, thinning, optional ad-hoc re-sign |
 | `pkg.rs` | Package-manager abstraction and categorization |
 | `dev_env.rs` | Dev-environment cache size/cleanup |
 | `model.rs` | Core types: `AppInfo`, `Condition`, `Sensitivity`, `SkipCondition` |

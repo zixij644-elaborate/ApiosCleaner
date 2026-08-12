@@ -7,8 +7,8 @@
 //!   apios clean-orphan       删除全部孤儿文件（交互确认）
 //!   apios dev-clean [env]    列出开发环境缓存；带 <env> 则清理（交互确认）
 //!   apios pkg <pm> <action>  包管理器：卸载包本体 + 依赖处理（brew 为当前实现）
-//!   apios lipo [app]         扫描通用（fat）二进制，显示可省空间（只读）
-//!   apios lipo thin <app>    瘦身为当前架构（交互确认；--sign 可选 ad-hoc 重签）
+//!   apios lipo [app]         扫描通用（fat）二进制，显示可省空间（只读；macOS 专属）
+//!   apios lipo thin <app>    瘦身为当前架构（交互确认；--sign 可选 ad-hoc 重签；macOS 专属）
 //!
 //! <app> 参数支持三种形式：
 //!   完整路径      apios uninstall /Applications/Foo.app
@@ -24,11 +24,12 @@ use std::process::exit;
 
 use apios_core::app_info::get_app_info;
 use apios_core::dev_env::{dedup_nested, dir_size, env_sizes, expand_globs, expand_home, find_env};
-use apios_core::lipo::{self, cpu_name, current_cputype, select_runnable_slice, FatFile};
 use apios_core::locations::Locations;
 use apios_core::model::{AppInfo, Sensitivity};
 use apios_core::orphan::ReversePathsSearcher;
 use apios_core::pkg::{detect_kind, PkgKind};
+#[cfg(target_os = "macos")]
+use apios_core::platform::lipo::{self, cpu_name, current_cputype, select_runnable_slice, FatFile};
 use apios_core::platform::{PackageManager, PackageManagers, ProcessControl, SystemPaths};
 use apios_core::scan::{default_app_folders, get_sorted_apps};
 use apios_core::search::AppPathFinder;
@@ -78,6 +79,8 @@ enum Command {
         action: PkgAction,
     },
     /// Scan apps for universal (fat) binaries; thin them to the current architecture
+    /// (macOS only: universal binaries are a Darwin format)
+    #[cfg(target_os = "macos")]
     Lipo {
         /// App path or name to scan; omit to scan all apps in the default folders
         app: Option<String>,
@@ -103,6 +106,7 @@ enum PkgAction {
     Autoremove,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Subcommand)]
 enum LipoAction {
     /// Thin universal binaries in an app to the current architecture (irreversible)
@@ -124,6 +128,7 @@ fn main() {
         Command::CleanOrphan => cmd_clean_orphan(&cli),
         Command::DevClean { ref env } => cmd_dev_clean(&cli, env.as_deref()),
         Command::Pkg { ref pm, ref action } => cmd_pkg(&cli, pm, action),
+        #[cfg(target_os = "macos")]
         Command::Lipo {
             ref app,
             ref action,
@@ -613,6 +618,7 @@ fn cmd_pkg_autoremove(cli: &Cli, pm: &dyn PackageManager) {
 
 // ---------- Lipo（fat 瘦身） ----------
 
+#[cfg(target_os = "macos")]
 fn cmd_lipo(cli: &Cli, app: Option<&str>, action: Option<&LipoAction>) {
     match action {
         Some(LipoAction::Thin { app, sign }) => cmd_lipo_thin(cli, app, *sign),
@@ -622,11 +628,13 @@ fn cmd_lipo(cli: &Cli, app: Option<&str>, action: Option<&LipoAction>) {
 
 /// 目标切片（当前架构 + CPU 能力过滤：x86_64h 仅在有 AVX2 时可选）；
 /// 当前架构不在文件内 → None（跳过该文件）
-fn keep_slice(fat: &FatFile) -> Option<&apios_core::lipo::FatSlice> {
+#[cfg(target_os = "macos")]
+fn keep_slice(fat: &FatFile) -> Option<&apios_core::platform::lipo::FatSlice> {
     select_runnable_slice(&fat.slices, current_cputype())
 }
 
 /// 切片描述："arm64 (52.3 MB) · x86_64 (48.1 MB)"
+#[cfg(target_os = "macos")]
 fn describe_slices(fat: &FatFile) -> String {
     fat.slices
         .iter()
@@ -642,6 +650,7 @@ fn describe_slices(fat: &FatFile) -> String {
 }
 
 /// 相对路径显示，超长截断（避免 Qt 插件式长路径把列宽撑爆）
+#[cfg(target_os = "macos")]
 fn truncated_rel(path: &Path, bundle: &Path, max: usize) -> String {
     let rel = path
         .strip_prefix(bundle)
@@ -658,6 +667,7 @@ fn truncated_rel(path: &Path, bundle: &Path, max: usize) -> String {
 }
 
 /// 打印单个 app 的 fat 二进制明细；返回（可省总量, fat 二进制数）
+#[cfg(target_os = "macos")]
 fn print_app_binaries(bundle: &Path, bins: &[(std::path::PathBuf, FatFile)]) -> (u64, usize) {
     const MAX_PATH: usize = 64;
     let width = bins
@@ -688,6 +698,7 @@ fn print_app_binaries(bundle: &Path, bins: &[(std::path::PathBuf, FatFile)]) -> 
 }
 
 /// 扫描：`apios lipo`（全部应用）或 `apios lipo <app>`（只读）
+#[cfg(target_os = "macos")]
 fn cmd_lipo_scan(cli: &Cli, app: Option<&str>) {
     let _ = cli;
     if let Some(arg) = app {
@@ -740,6 +751,7 @@ fn cmd_lipo_scan(cli: &Cli, app: Option<&str>) {
 }
 
 /// 瘦身：`apios lipo thin <app> [--sign]`（破坏性，交互确认）
+#[cfg(target_os = "macos")]
 fn cmd_lipo_thin(cli: &Cli, arg: &str, sign: bool) {
     let bundle = resolve_app_or_exit(arg);
     let app_name = bundle
@@ -753,7 +765,7 @@ fn cmd_lipo_thin(cli: &Cli, arg: &str, sign: bool) {
     let plan: Vec<(
         &std::path::PathBuf,
         &FatFile,
-        &apios_core::lipo::FatSlice,
+        &apios_core::platform::lipo::FatSlice,
         u64,
     )> = bins
         .iter()

@@ -113,8 +113,8 @@ apios pkg brew uninstall --zap firefox
 # Remove orphaned dependencies (dry-run is shown before confirmation)
 apios pkg brew autoremove
 
-# Lipo: scan all apps for universal (fat) binaries and show how much can be
-# freed (read-only); or scan a single app
+# Lipo (macOS only): scan all apps for universal (fat) binaries and show how
+# much can be freed (read-only); or scan a single app
 apios lipo
 apios lipo Firefox
 

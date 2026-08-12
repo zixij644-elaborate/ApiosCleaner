@@ -8,7 +8,6 @@ pub mod conditions;
 pub mod dev_env;
 pub mod format;
 pub mod identifiers;
-pub mod lipo;
 pub mod locations;
 pub mod matcher;
 pub mod model;

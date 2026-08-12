@@ -9,8 +9,9 @@
 //! 5. 原版直接覆盖写回（中断即损坏）→ 同目录临时文件 + 原子 rename（保留权限位）
 //! 6. 原版无任何边界校验 → nfat_arch 上限 / 切片越界 / 表截断统一校验
 //!
-//! 全部纯 std、零 OS API → 跨平台（macOS/Linux/Windows 编译与单测）。唯一平台相关
-//! 的是可选的 ad-hoc 重签（codesign，macOS 专属，cfg 门控），与核心解析完全隔离。
+//! 模块归属平台层（`#[cfg(target_os = "macos")]` 门控）：universal（fat）二进制是
+//! Darwin 平台独有的格式，其他平台无此结构，非 macOS 构建不编译本模块。
+//! 解析/选择/扫描/瘦身均为纯 std，唯一 OS 相关是 ad-hoc 重签（codesign）。
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -369,8 +370,7 @@ pub fn touch_dir(path: &Path) -> std::io::Result<()> {
 }
 
 /// ad-hoc 重签（可选增强：原版接受签名失效，`--sign` 时修复）。
-/// 仅 macOS 有 codesign；其他平台返回错误（核心解析不受影响）。
-#[cfg(target_os = "macos")]
+/// macOS 专属（模块整体已门控）。
 pub fn re_sign(path: &Path) -> Result<(), String> {
     let output = std::process::Command::new("codesign")
         .arg("-s")
@@ -386,11 +386,6 @@ pub fn re_sign(path: &Path) -> Result<(), String> {
         let tail = tail.iter().rev().copied().collect::<Vec<_>>().join("\n");
         Err(format!("codesign failed:\n{tail}"))
     }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn re_sign(_path: &Path) -> Result<(), String> {
-    Err("codesign re-signing is macOS-only".to_string())
 }
 
 #[cfg(test)]
@@ -832,11 +827,5 @@ mod tests {
     fn test_touch_dir_ok() {
         let tmp = tempfile::TempDir::new().unwrap();
         assert!(touch_dir(tmp.path()).is_ok());
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn test_re_sign_macos_only_error() {
-        assert!(re_sign(Path::new("/nonexistent")).is_err());
     }
 }
