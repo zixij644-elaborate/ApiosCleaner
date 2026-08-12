@@ -165,6 +165,8 @@ correctly in legacy cmd/PowerShell consoles.
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the portable-core + adapter
   pattern, module map, and safety model
+- [docs/ApiosCleaner-项目进度与路线图.md](docs/ApiosCleaner-项目进度与路线图.md) —
+  roadmap, milestone status, and multi-platform development workflow
 - [CHANGELOG.md](CHANGELOG.md) — release history
 
 ## License
