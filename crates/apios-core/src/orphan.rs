@@ -130,36 +130,43 @@ impl ReversePathsSearcher {
                 // Windows 无 bundle id 兜底，且 DisplayName 常含版本号
                 // （"7-Zip 24.09 (x64)"）匹配不上供应商目录名（"7-Zip"）——
                 // 已装应用的 Program Files/AppData 目录会整段误报为孤儿。
-                // 从可执行文件路径派生 needle：父目录名 + 文件 stem
-                // （QQ.exe→Tencent、WeChat.exe→wechat、Code.exe→code）。
-                // 开始菜单 .lnk 的父目录（"Programs"）是结构目录，跳过
-                // （否则成为全路径宽匹配，误杀真实残留）。
-                let dir = app
-                    .path
-                    .parent()
-                    .and_then(|d| d.file_name())
-                    .map(|n| pear_format(&n.to_string_lossy()));
-                if let Some(d) = dir.filter(|d| {
-                    // 结构/系统目录：不是供应商标识。Program Files 根直放的
-                    // exe、Common Files 共享目录、Windows 系统目录 —— 作为
-                    // needle 会成全路径宽匹配（"programfiles" 命中所有
-                    // Program Files 路径，fix A 直接失效）
-                    !matches!(
-                        d.as_str(),
-                        "programs"
-                            | "programsx86"
-                            | "startmenu"
-                            | "applications"
-                            | "programfiles"
-                            | "programfilesx86"
-                            | "windows"
-                            | "system32"
-                            | "syswow64"
-                            | "commonfiles"
-                    )
-                }) {
-                    if path_needle_qualifies(&d) {
-                        needles.push(d);
+                // 从可执行文件路径派生 needle：祖先目录（最多 3 级，exe 常
+                // 嵌在供应商多级目录下：Tencent\Weixin\Weixin.exe、Netease\
+                // CloudMusic\cloudmusic.exe）+ 文件 stem（Code.exe→code）。
+                // 结构/系统目录名跳过 —— 作为 needle 会成全路径宽匹配
+                // （"programfiles" 命中所有 Program Files 路径，fix A 直接
+                // 失效；"local"/"appdata" 同理）。.lnk 发现的便携应用路径
+                // 是 .lnk 本身：祖先即 Programs/Start Menu 结构目录，无贡献。
+                const STRUCTURAL_DIRS: [&str; 21] = [
+                    "programs",
+                    "programsx86",
+                    "startmenu",
+                    "applications",
+                    "programfiles",
+                    "programfilesx86",
+                    "commonfiles",
+                    "program",
+                    "bin",
+                    "microsoft",
+                    "windows",
+                    "system32",
+                    "syswow64",
+                    "local",
+                    "roaming",
+                    "appdata",
+                    "programdata",
+                    "documents",
+                    "desktop",
+                    "temp",
+                    "users",
+                ];
+                for anc in app.path.ancestors().skip(1).take(3) {
+                    let Some(name) = anc.file_name() else {
+                        continue;
+                    };
+                    let f = pear_format(&name.to_string_lossy());
+                    if path_needle_qualifies(&f) && !STRUCTURAL_DIRS.contains(&f.as_str()) {
+                        needles.push(f);
                     }
                 }
                 if let Some(stem) = app
@@ -548,6 +555,70 @@ mod tests {
         let searcher = ReversePathsSearcher::new(locations, vec![app]);
         let re = searcher.needles_regex.as_ref().expect("应构建合并正则");
         assert!(re.is_match("cusersuappdataroamingcode"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_nested_vendor_dirs_derive_needles() {
+        // 微信：exe 嵌在 Tencent\Weixin 下 —— 只取父目录（weixin）匹配不上
+        // Program Files\Tencent。祖先 3 级必须给出 tencent
+        let app = AppInfo {
+            path: PathBuf::from(r"C:\Program Files\Tencent\Weixin\Weixin.exe"),
+            bundle_identifier: String::new(),
+            app_name: "微信".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+        let locations = Locations::new();
+        let searcher = ReversePathsSearcher::new(locations, vec![app]);
+        let re = searcher.needles_regex.as_ref().expect("应构建合并正则");
+        assert!(re.is_match("cprogramfilestencent"));
+        assert!(re.is_match("cprogramdatatencent"));
+        assert!(
+            re.is_match("cuserszniedocumentsxwechatfiles"),
+            "weixin stem"
+        );
+
+        // 网易云：Netease\CloudMusic\cloudmusic.exe → netease
+        let app = AppInfo {
+            path: PathBuf::from(r"C:\Program Files\Netease\CloudMusic\cloudmusic.exe"),
+            bundle_identifier: String::new(),
+            app_name: "网易云音乐".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+        let locations = Locations::new();
+        let searcher = ReversePathsSearcher::new(locations, vec![app]);
+        assert!(searcher
+            .needles_regex
+            .as_ref()
+            .unwrap()
+            .is_match("cprogramfilesnetease"));
+
+        // 深层 exe（Program 结构目录穿插）：Thunder Network\Thunder\Program\
+        // Thunder.exe → 3 级祖先给出 thunder + thundernetwork（Program 是
+        // 结构名跳过；Program Files 是第 4 级不进入）
+        let app = AppInfo {
+            path: PathBuf::from(r"C:\Program Files\Thunder Network\Thunder\Program\Thunder.exe"),
+            bundle_identifier: String::new(),
+            app_name: "迅雷".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: false,
+            steam: false,
+            wrapped: false,
+        };
+        let locations = Locations::new();
+        let searcher = ReversePathsSearcher::new(locations, vec![app]);
+        let re = searcher.needles_regex.as_ref().expect("应构建合并正则");
+        assert!(re.is_match("cprogramfilesthunder"));
+        assert!(re.is_match("cprogramdatathundernetwork"));
     }
 
     #[cfg(windows)]
