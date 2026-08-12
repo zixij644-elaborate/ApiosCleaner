@@ -56,8 +56,12 @@ fn build_from_list(paths: &[PathBuf]) -> Vec<u16> {
     buf
 }
 
-/// 一次 SHFileOperationW 调用（全静默，无 UI）
-fn shfileop_delete(paths: &[PathBuf]) -> bool {
+/// 一次 SHFileOperationW 调用（全静默，无 UI）。
+///
+/// 返回 (调用成功, 是否中止)。`f_any_operations_aborted` 是 BOOL：SHFileOperationW
+/// 返回 0 也可能静默中止（个别文件被占用/拒绝，FOF_NOERRORUI 下无提示）——
+/// 不回读该标志会把部分失败虚报为全部成功。
+fn shfileop_delete(paths: &[PathBuf]) -> (bool, bool) {
     let from = build_from_list(paths);
     let mut op = SHFILEOPSTRUCTW {
         hwnd: std::ptr::null_mut(),
@@ -69,7 +73,8 @@ fn shfileop_delete(paths: &[PathBuf]) -> bool {
         h_name_mappings: std::ptr::null_mut(),
         lpsz_progress_title: std::ptr::null(),
     };
-    unsafe { SHFileOperationW(&mut op) == 0 }
+    let rc = unsafe { SHFileOperationW(&mut op) };
+    (rc == 0, op.f_any_operations_aborted != 0)
 }
 
 /// 把 paths 移入回收站，返回成功移入的路径。
@@ -86,10 +91,11 @@ pub fn recycle_batch(paths: &[PathBuf]) -> Vec<PathBuf> {
     if existing.is_empty() {
         return Vec::new();
     }
-    if shfileop_delete(&existing) {
+    let (ok, aborted) = shfileop_delete(&existing);
+    if ok && !aborted {
         return existing;
     }
-    // 批量失败：已不存在的 = 批量调用中已移走（部分成功）
+    // 失败或中止：已不存在的 = 批量调用中已移走（部分成功）
     let mut moved: Vec<PathBuf> = Vec::new();
     let mut remaining: Vec<PathBuf> = Vec::new();
     for p in &existing {
@@ -99,8 +105,10 @@ pub fn recycle_batch(paths: &[PathBuf]) -> Vec<PathBuf> {
             moved.push(p.clone());
         }
     }
+    // 逐文件重试同样要回读 aborted：中止 = 该文件未被移走（占用/拒绝）
     for p in remaining {
-        if shfileop_delete(std::slice::from_ref(&p)) {
+        let (ok, aborted) = shfileop_delete(std::slice::from_ref(&p));
+        if ok && !aborted {
             moved.push(p);
         }
     }

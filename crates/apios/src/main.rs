@@ -507,6 +507,27 @@ fn get_app_info_or_exit(path: &Path) -> AppInfo {
         if let Some(app) = find_app_by_path(path, &apps) {
             return app;
         }
+        // 未注册应用（便携版）按目录名构造最小 AppInfo。安全门槛：路径必须
+        // 看起来像应用 —— 本身是 .exe，或目录内（顶层）含 .exe。否则任意
+        // 路径（如 `apios uninstall .` 命中 cwd）都会被整目录移入回收站。
+        let looks_like_app = (path.is_file()
+            && path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("exe")))
+            || (path.is_dir()
+                && std::fs::read_dir(path).is_ok_and(|entries| {
+                    entries.flatten().any(|e| {
+                        let p = e.path();
+                        p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe"))
+                    })
+                }));
+        if !looks_like_app {
+            eprintln!(
+                "apios: {} is not an app (no .exe found); refusing to delete",
+                path.display()
+            );
+            exit(1);
+        }
         let app_name = path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())

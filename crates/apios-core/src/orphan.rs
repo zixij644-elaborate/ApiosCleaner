@@ -214,8 +214,16 @@ impl ReversePathsSearcher {
         //   名单按名字匹配（大小写不敏感），与父目录无关（名字语义稳定）
         #[cfg(target_os = "windows")]
         {
+            use std::os::windows::fs::MetadataExt;
             if std::fs::symlink_metadata(path)
-                .map(|m| m.file_type().is_symlink())
+                .map(|m| {
+                    // is_symlink 实测已覆盖 junction（检查 REPARSE_POINT 属性位，
+                    // 106→96 实证）；属性位双保险 —— 防 std 未来把 is_symlink
+                    // 收窄为仅 SYMLINK tag 时 junction 重新泄漏
+                    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+                    m.file_type().is_symlink()
+                        || m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                })
                 .unwrap_or(false)
             {
                 return;

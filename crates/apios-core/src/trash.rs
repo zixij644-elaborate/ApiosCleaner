@@ -87,6 +87,13 @@ fn normalize_absolute(path: &str) -> Option<String> {
         return None;
     }
     if let Some(p) = prefix {
+        // Windows 语义：路径段尾部的 '.'/空格 被 Win32 忽略（"C:\Windows. " ≡
+        // "C:\Windows"）。剥除后与 critical 表比较才一致，否则词法形态绕过保护。
+        // 仅 Windows 分支生效 —— POSIX 里 "foo." 是合法不同路径，不剥。
+        let parts: Vec<String> = parts
+            .iter()
+            .map(|s| s.trim_end_matches(['.', ' ']).to_string())
+            .collect();
         Some(format!("{p}\\{}", parts.join("\\")))
     } else if parts.is_empty() {
         Some("/".to_string())
@@ -112,11 +119,32 @@ pub fn validate_path(path: &str) -> bool {
     let drive_root = normalized.len() == 3
         && normalized.as_bytes()[1] == b':'
         && normalized.as_bytes()[2] == b'\\';
-    if drive_root
-        || normalized == "/"
-        || adapter.critical_paths().contains(&normalized)
-        || normalized == home
-    {
+    // critical 表比较：Windows 大小写不敏感 + 尾点空格已剥（注册表路径大小写
+    // 不可控，Windows 路径语义大小写不敏感）；POSIX 精确比较（大小写敏感是语义）。
+    let protected = {
+        #[cfg(windows)]
+        {
+            adapter
+                .critical_paths()
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(&normalized))
+        }
+        #[cfg(not(windows))]
+        {
+            adapter.critical_paths().contains(&normalized)
+        }
+    };
+    let is_home = {
+        #[cfg(windows)]
+        {
+            normalized.eq_ignore_ascii_case(&home)
+        }
+        #[cfg(not(windows))]
+        {
+            normalized == home
+        }
+    };
+    if drive_root || normalized == "/" || protected || is_home {
         return false;
     }
     // 仅 POSIX：{home}/Applications 是受保护区（home 下唯一整体保护的应用目录；
@@ -354,10 +382,18 @@ mod tests {
         assert!(!validate_path("C:\\")); // 盘符根格式检测
         assert!(!validate_path("D:\\")); // 非 C: 盘根同样拦截
         assert!(!validate_path("C:\\Windows\\..\\Windows")); // 归一化后仍拦截
+                                                             // 大小写不敏感（注册表路径大小写不可控）→ 小写 critical 根必须拦截
+        assert!(!validate_path("c:\\windows"));
+        assert!(!validate_path("c:\\program files"));
+        // 尾点/尾空格（Win32 忽略，归一化剥除后必须拦截）
+        assert!(!validate_path("C:\\WINDOWS. "));
+        assert!(!validate_path("C:\\Windows\\..\\WINDOWS."));
         assert!(validate_path("C:\\Program Files\\Foo\\x.txt")); // 合法子路径放行
         assert!(validate_path("C:\\Windows\\..\\System32")); // → C:\System32 子路径合法
+        assert!(validate_path("c:\\program files\\system32")); // 子路径放行（大小写无关）
         let home = crate::platform::adapter().home();
         assert!(!validate_path(&home)); // USERPROFILE 根拦截
+        assert!(!validate_path(&home.to_lowercase())); // home 根大小写变体同样拦截
         assert!(validate_path(&format!("{home}\\AppData\\Roaming\\x"))); // 子路径放行
     }
 

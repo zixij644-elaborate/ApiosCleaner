@@ -111,7 +111,9 @@ pub fn specific_condition(
     }
 
     // --- 每应用条件（先 exclude 后 include，AppPathsFetch.swift:369-378）---
-    if ids.use_bundle_identifier {
+    // formatted_bundle_id 为空时 contains("") 恒 true → 每个条件都被当作命中，
+    // 其 include 关键词可能误伤无关路径 —— 空 id 直接跳过条件循环
+    if ids.use_bundle_identifier && !ids.formatted_bundle_id.is_empty() {
         for condition in conditions {
             if ids
                 .formatted_bundle_id
@@ -136,11 +138,15 @@ pub fn specific_condition(
     }
 
     // --- webApp：仅 bundle ID 包含匹配 ---
+    // 空 bundle id（Windows/便携应用）不匹配 —— contains("") 恒 true 会把
+    // web app 误判为与一切路径相关
     if app.web_app {
-        return normalized_item_name.contains(ids.formatted_bundle_id.as_str());
+        return !ids.formatted_bundle_id.is_empty()
+            && normalized_item_name.contains(ids.formatted_bundle_id.as_str());
     }
 
-    let full_bundle_match = normalized_item_name.contains(ids.formatted_bundle_id.as_str());
+    let full_bundle_match = !ids.formatted_bundle_id.is_empty()
+        && normalized_item_name.contains(ids.formatted_bundle_id.as_str());
     let strict = sensitivity == Sensitivity::Strict;
 
     // 空值保护（原版 !isEmpty 守卫）
@@ -163,8 +169,10 @@ pub fn specific_condition(
             normalized_item_name.contains(ids.app_name_letters_only.as_str())
         };
 
-    // 两段 bundle ID 匹配（Enhanced/Deep 仅）
+    // 两段 bundle ID 匹配（Enhanced/Deep 仅）。
+    // 空值守卫：contains("") 恒 true 会让 Enhanced/Deep 匹配一切路径
     let two_component_match = sensitivity != Sensitivity::Strict
+        && !ids.bundle_last_two_components.is_empty()
         && normalized_item_name.contains(ids.bundle_last_two_components.as_str());
 
     // company 名匹配（Deep 仅）
@@ -341,6 +349,42 @@ mod tests {
         assert!(specific_condition(
             "knollsoft",
             Path::new("/tmp/knollsoft"),
+            &app,
+            &ids,
+            Sensitivity::Deep,
+            &conds()
+        ));
+    }
+
+    #[test]
+    fn test_empty_bundle_id_does_not_match_everything() {
+        // 空 bundle id（Windows/便携应用）不得把任意路径判为相关：
+        // 修复前 web_app 分支与 Enhanced/Deep 两段匹配对 contains("") 恒 true
+        let mut app = AppInfo {
+            path: PathBuf::from(r"C:\Apps\PortableApp\portable.exe"),
+            bundle_identifier: String::new(),
+            app_name: "PortableApp".to_string(),
+            entitlements: vec![],
+            team_identifier: None,
+            web_app: true,
+            steam: false,
+            wrapped: false,
+        };
+        let ids = CachedIdentifiers::from_app_info(&app);
+        assert!(!specific_condition(
+            "totallyunrelated",
+            Path::new("/tmp/x"),
+            &app,
+            &ids,
+            Sensitivity::Enhanced,
+            &conds()
+        ));
+        // 非 web_app：Deep 两段 bundle 匹配的相同门禁
+        app.web_app = false;
+        let ids = CachedIdentifiers::from_app_info(&app);
+        assert!(!specific_condition(
+            "totallyunrelated",
+            Path::new("/tmp/x"),
             &app,
             &ids,
             Sensitivity::Deep,
