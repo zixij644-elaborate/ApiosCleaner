@@ -250,7 +250,10 @@ fn enum_uninstall_at(hive: isize, subkey: &str) -> Vec<UninstallEntry> {
 /// 重复显示名由调用方处理）
 pub fn all_uninstall_entries() -> Vec<UninstallEntry> {
     let mut out = enum_uninstall_at(HKEY_LOCAL_MACHINE, UNINSTALL_SUBKEY);
-    out.extend(enum_uninstall_at(HKEY_LOCAL_MACHINE, UNINSTALL_SUBKEY_WOW64));
+    out.extend(enum_uninstall_at(
+        HKEY_LOCAL_MACHINE,
+        UNINSTALL_SUBKEY_WOW64,
+    ));
     out.extend(enum_uninstall_at(HKEY_CURRENT_USER, UNINSTALL_SUBKEY));
     out
 }
