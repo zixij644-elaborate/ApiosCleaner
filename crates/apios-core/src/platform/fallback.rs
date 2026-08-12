@@ -8,7 +8,8 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{AppMetadata, SystemPaths, Trash};
+use super::{AppMetadata, SpotlightIndex, SystemPaths, Trash};
+use crate::model::Sensitivity;
 
 /// 非 macOS 平台的基础适配器（当前按 Linux XDG 约定提供默认值）
 pub struct FallbackAdapter {
@@ -92,5 +93,17 @@ impl Trash for FallbackAdapter {
     /// XDG trash 目录（规范中 home trash 固定位于 ~/.local/share/Trash）
     fn trash_dir(&self) -> PathBuf {
         PathBuf::from(format!("{}/.local/share/Trash", self.home))
+    }
+}
+
+impl SpotlightIndex for FallbackAdapter {
+    /// 无等价索引服务（TODO: Linux 可考虑 baloo/recoll 等，属平台专业适配）
+    fn spotlight_supplemental_paths(
+        &self,
+        _app_name: &str,
+        _bundle_id: &str,
+        _sensitivity: Sensitivity,
+    ) -> Vec<PathBuf> {
+        Vec::new()
     }
 }

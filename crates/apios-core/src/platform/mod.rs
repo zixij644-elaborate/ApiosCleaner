@@ -11,6 +11,21 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::model::Sensitivity;
+
+/// 全盘索引补充查询（原版 spotlightSupplementalPaths，AppPathsFetch.swift:490-614）
+///
+/// 路径表逐目录扫描有盲区（路径表外的深层残留），macOS 用 Spotlight 索引（mdfind）
+/// 做补充；其他平台暂无等价索引服务，返回空。
+pub trait SpotlightIndex {
+    fn spotlight_supplemental_paths(
+        &self,
+        app_name: &str,
+        bundle_id: &str,
+        sensitivity: Sensitivity,
+    ) -> Vec<PathBuf>;
+}
+
 /// 系统目录布局：应用搜索路径与用户目录
 pub trait SystemPaths {
     fn home(&self) -> String;

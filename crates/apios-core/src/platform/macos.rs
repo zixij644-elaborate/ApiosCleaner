@@ -6,8 +6,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
-use super::{AppMetadata, SystemPaths, Trash};
+use super::{AppMetadata, SpotlightIndex, SystemPaths, Trash};
+use crate::format::pear_format;
+use crate::model::Sensitivity;
 
 /// macOS 平台适配器
 pub struct MacOsAdapter {
@@ -339,5 +342,156 @@ impl AppMetadata for MacOsAdapter {
 impl Trash for MacOsAdapter {
     fn trash_dir(&self) -> PathBuf {
         PathBuf::from(format!("{}/.Trash", self.home))
+    }
+}
+
+/// NSPredicate 字符串转义：单引号 → ''（SQL 风格，Spotlight 查询语法）
+fn escape_predicate_value(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+/// Strict/Enhanced 谓词（AppPathsFetch.swift:500-510）。
+/// Deep 的多元数据组合谓词（Comment/Creator/Copyright/TextContent 等）属 GUI 功能，暂不实现。
+fn build_predicate(app_name: &str, bundle_id: &str, sensitivity: Sensitivity) -> Option<String> {
+    let name = escape_predicate_value(app_name);
+    let bundle = escape_predicate_value(bundle_id);
+    match sensitivity {
+        Sensitivity::Strict => Some(format!(
+            "kMDItemDisplayName == '{name}'cd || kMDItemDisplayName == '{bundle}'cd"
+        )),
+        Sensitivity::Enhanced => Some(format!(
+            "kMDItemDisplayName CONTAINS[cd] '{name}' || kMDItemPath CONTAINS[cd] '{name}' \
+             || kMDItemDisplayName CONTAINS[cd] '{bundle}' || kMDItemPath CONTAINS[cd] '{bundle}'"
+        )),
+        Sensitivity::Deep => None, // TODO: 多词 AND 谓词等（AppPathsFetch.swift:516-577）
+    }
+}
+
+/// Strict 后过滤（AppPathsFetch.swift:601-607）：
+/// 末段组件 pearFormat 后必须等于 appName/bundleID 的 pearFormat
+fn strict_post_filter(paths: Vec<PathBuf>, app_name: &str, bundle_id: &str) -> Vec<PathBuf> {
+    let name_formatted = pear_format(app_name);
+    let bundle_formatted = pear_format(bundle_id);
+    paths
+        .into_iter()
+        .filter(|p| {
+            let last = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let formatted = pear_format(&last);
+            formatted == name_formatted || formatted == bundle_formatted
+        })
+        .collect()
+}
+
+impl SpotlightIndex for MacOsAdapter {
+    /// mdfind 移植（替代 NSMetadataQuery）：-onlyin 用户主目录 + 谓词，5s 超时，500 条上限
+    fn spotlight_supplemental_paths(
+        &self,
+        app_name: &str,
+        bundle_id: &str,
+        sensitivity: Sensitivity,
+    ) -> Vec<PathBuf> {
+        let Some(predicate) = build_predicate(app_name, bundle_id, sensitivity) else {
+            return Vec::new();
+        };
+
+        // mdfind 毫秒级完成；索引重建时可能挂起 → 原版 5s 超时语义（线程 + recv_timeout）
+        let (tx, rx) = std::sync::mpsc::channel();
+        let home = self.home.clone();
+        std::thread::spawn(move || {
+            let output = Command::new("mdfind")
+                .args(["-onlyin", &home, &predicate])
+                .output();
+            let _ = tx.send(output);
+        });
+        // channel 元素即 Result<Output>；recv_timeout 失败（超时）或命令失败 → 空结果
+        let output = rx
+            .recv_timeout(Duration::from_secs(5))
+            .ok()
+            .and_then(|r| r.ok());
+        let Some(output) = output else {
+            return Vec::new();
+        };
+        if !output.status.success() {
+            return Vec::new();
+        }
+
+        let paths: Vec<PathBuf> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(PathBuf::from)
+            .collect();
+
+        // 上限（AppPathsFetch.swift:610-612）
+        let paths = if paths.len() > 500 {
+            paths.into_iter().take(500).collect()
+        } else {
+            paths
+        };
+
+        // Strict 精确匹配后过滤（Enhanced 无后过滤，原版仅 strict 过滤）
+        if sensitivity == Sensitivity::Strict {
+            strict_post_filter(paths, app_name, bundle_id)
+        } else {
+            paths
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_escape_predicate_value() {
+        assert_eq!(escape_predicate_value("Microsoft Edge"), "Microsoft Edge");
+        assert_eq!(escape_predicate_value("It's"), "It''s");
+        assert_eq!(escape_predicate_value("a'b'c"), "a''b''c");
+    }
+
+    #[test]
+    fn test_build_predicate_strict() {
+        let p = build_predicate("Microsoft Edge", "com.microsoft.edgemac", Sensitivity::Strict)
+            .unwrap();
+        assert_eq!(
+            p,
+            "kMDItemDisplayName == 'Microsoft Edge'cd || kMDItemDisplayName == 'com.microsoft.edgemac'cd"
+        );
+    }
+
+    #[test]
+    fn test_build_predicate_enhanced() {
+        let p = build_predicate("App", "com.app", Sensitivity::Enhanced).unwrap();
+        assert!(p.contains("CONTAINS[cd] 'App'"));
+        assert!(p.contains("kMDItemPath"));
+    }
+
+    #[test]
+    fn test_build_predicate_deep_unsupported() {
+        assert!(build_predicate("App", "com.app", Sensitivity::Deep).is_none());
+    }
+
+    #[test]
+    fn test_build_predicate_escapes_quotes() {
+        // 用户可控值（Info.plist 应用名）含单引号 → 转义防谓词语法破坏
+        let p = build_predicate("It's App", "com.it.sapp", Sensitivity::Strict).unwrap();
+        assert_eq!(p, "kMDItemDisplayName == 'It''s App'cd || kMDItemDisplayName == 'com.it.sapp'cd");
+    }
+
+    #[test]
+    fn test_strict_post_filter() {
+        let paths = vec![
+            PathBuf::from("/Users/u/Projects/Pearcleaner"), // 末段 == appName pearFormat ✅
+            PathBuf::from("/Users/u/Library/Preferences/com.alienator88.Pearcleaner.plist"),
+            // ↑ 末段带扩展名，pearFormat 后 != 两者，严格模式应剔除（原版语义）
+            PathBuf::from("/Users/u/Library/WebKit/com.alienator88.Pearcleaner"), // 末段 == bundleID ✅
+            PathBuf::from("/Users/u/Library/Group Containers/UBF8T346G9.com.microsoft.oneauth"), // 无关
+        ];
+        let filtered = strict_post_filter(paths, "Pearcleaner", "com.alienator88.Pearcleaner");
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered[0].ends_with("Projects/Pearcleaner"));
+        assert!(filtered[1].ends_with("WebKit/com.alienator88.Pearcleaner"));
     }
 }

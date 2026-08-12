@@ -64,6 +64,12 @@ impl Locations {
     }
 }
 
+impl Default for Locations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 路径存在性判断（原版 Condition.init 中 FileManager.fileExists）
 pub fn existing(path: &str) -> bool {
     std::path::Path::new(path).exists()

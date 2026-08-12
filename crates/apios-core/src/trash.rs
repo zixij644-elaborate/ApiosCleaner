@@ -159,8 +159,7 @@ pub fn restore_files(file_pairs: &[FilePair]) -> bool {
     // 归档目录为空则移除
     if let Some(bundle) = file_pairs
         .first()
-        .map(|p| p.trash_path.parent().map(|p| p.to_path_buf()))
-        .flatten()
+        .and_then(|p| p.trash_path.parent().map(|p| p.to_path_buf()))
     {
         let _ = std::fs::remove_dir(&bundle);
     }

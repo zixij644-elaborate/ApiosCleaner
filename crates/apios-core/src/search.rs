@@ -12,6 +12,7 @@ use crate::identifiers::CachedIdentifiers;
 use crate::locations::{standard_library_subdirectories, Locations};
 use crate::matcher::{should_skip_item, specific_condition};
 use crate::model::{AppInfo, Condition, Sensitivity, SkipCondition};
+use crate::platform::SpotlightIndex;
 
 pub struct AppPathFinder<'a> {
     pub app: &'a AppInfo,
@@ -204,8 +205,7 @@ impl<'a> AppPathFinder<'a> {
         outliers
     }
 
-    /// 最终集合整理（CLI 版，AppPathsFetch.swift:690-731）。
-    /// 注意：Spotlight 补充查询（NSMetadataQuery，ObjC）PoC 阶段暂不移植（见计划 §6）
+    /// 最终集合整理（CLI 版，AppPathsFetch.swift:690-731）
     fn finalize_collection_cli(&self) -> Vec<PathBuf> {
         let outliers = self.handle_outliers(true);
         let outliers_ex = self.handle_outliers(false);
@@ -213,6 +213,14 @@ impl<'a> AppPathFinder<'a> {
         let mut temp: Vec<PathBuf> = self.collection.iter().cloned().collect();
         temp.extend(self.containers.iter().cloned());
         temp.extend(outliers);
+
+        // Spotlight 补充（AppPathsFetch.swift:700-704）：只加手动扫描集合外的索引命中
+        let spotlight = crate::platform::adapter().spotlight_supplemental_paths(
+            &self.app.app_name,
+            &self.app.bundle_identifier,
+            self.sensitivity,
+        );
+        temp.extend(spotlight.into_iter().filter(|p| !self.collection.contains(p)));
 
         let exclude_paths: HashSet<&Path> = outliers_ex.iter().map(|p| p.as_path()).collect();
         temp.retain(|url| !exclude_paths.contains(url.as_path()));
