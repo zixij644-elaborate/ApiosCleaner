@@ -2,11 +2,16 @@
 //!
 //! 用法：
 //!   apios list <app>         列出应用相关文件（只读，不删除）
-//!   apios uninstall <app>    卸载：应用本体 + 全部相关文件 → 回收站（交互确认）
-//!   apios orphan             列出孤儿文件（只读，不删除）
-//!   apios clean-orphan       删除孤儿文件（编号交互选择；'a' 全删）
+//!   apios uninstall <app>    卸载：应用本体 + 全部相关文件 → 回收站（交互确认；
+//!                             --except PATH 跳过匹配路径，可重复）
+//!   apios orphan             列出孤儿文件（只读；编号与 clean-orphan 一致，
+//!                             受保护条目标注 [sudo]）
+//!   apios clean-orphan       删除孤儿文件（编号交互选择：1,3-5 范围 / a 全选 /
+//!                             Enter 取消；受保护项标注 [sudo] 可跳过；
+//!                             --except PATH 先剔除；-y 全删）
 //!   apios dev-clean [env]    列出开发环境缓存；带 <env> 则清理（交互确认）
-//!   apios pkg <pm> <action>  包管理器：卸载包本体 + 依赖处理（brew 为当前实现）
+//!   apios pkg <pm> <action>  包管理器：卸载包本体 + 依赖处理
+//!                             （macOS: brew；Windows: winget；Linux: apt）
 //!   apios plugins [类别]     列出插件（18 类：音频/偏好面板/QuickLook 等）
 //!   apios plugins --clean    清理插件（交互确认；可指定类别，如 --clean audio）
 //!   apios lipo [app]         扫描通用（fat）二进制，显示可省空间（只读；macOS 专属）
@@ -16,6 +21,7 @@
 //!   完整路径      apios uninstall /Applications/Foo.app
 //!   应用名        apios uninstall Foo        （在默认应用目录自动查找 Foo.app）
 //!   当前目录      apios uninstall .
+//!   Windows 另有注册表 DisplayName / .lnk 路径；Linux 为 .desktop 应用名
 //!
 //! 删除类命令都会先列出影响范围并请求确认（y/N，默认拒绝）。
 //! 脚本与 GUI 对接用 `-y` 跳过确认；`--help` 查看全部用法。

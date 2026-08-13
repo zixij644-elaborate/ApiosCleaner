@@ -28,7 +28,7 @@ flowchart TB
             TRAITS["traits<br/><br/>SystemPaths · AppMetadata · Trash<br/>SpotlightIndex · ProcessControl<br/>DevEnvPaths · PackageManagers<br/>PluginPaths · AppDiscovery"]
             MAC["macOS 实现<br/><br/>macos.rs · homebrew.rs<br/>lipo.rs — 通用二进制瘦身<br/>仅 cfg(macos)：Darwin 格式"]
             WIN["Windows 实现<br/><br/>windows.rs · win_registry.rs<br/>win_trash.rs · winget.rs<br/>仅 cfg(windows)：注册表 / shell API"]
-            FB["fallback 实现<br/><br/>fallback.rs<br/>XDG 默认值"]
+            LINUX["Linux 实现<br/><br/>linux.rs · apt.rs<br/>XDG 回收站 · .desktop 发现<br/>仅 cfg(其他)"]
         end
     end
 
@@ -36,7 +36,7 @@ flowchart TB
     LOGIC -->|"adapter() + trait 调用"| TRAITS
     TRAITS -->|"cfg!(target_os = macos)"| MAC
     TRAITS -->|"cfg!(target_os = windows)"| WIN
-    TRAITS -->|"其他目标"| FB
+    TRAITS -->|"其他目标"| LINUX
 ```
 
 ## Crate
@@ -50,19 +50,19 @@ flowchart TB
 
 每个与 OS 相关的行为都是 `apios-core/src/platform/` 下的一个 trait：
 
-| Trait | 职责 | macOS 实现 | Windows 实现 | fallback 实现 |
+| Trait | 职责 | macOS 实现 | Windows 实现 | Linux 实现 |
 |---|---|---|---|---|
-| `SystemPaths` | home、缓存、临时目录、应用目录 | 真实路径 | `USERPROFILE` / `%APPDATA%` / `%LOCALAPPDATA%` 系 | XDG 默认值 |
+| `SystemPaths` | home、缓存、临时目录、应用目录 | 真实路径 | `USERPROFILE` / `%APPDATA%` / `%LOCALAPPDATA%` 系 | XDG Base Directory |
 | `AppMetadata` | entitlements、team identifier | codesign | `None`（元数据在注册表） | `None` |
-| `Trash` | 回收站目录 + `move_to_trash` 动作 | `~/.Trash`、归档移动 | `SHFileOperationW`（`FO_DELETE` + `FOF_ALLOWUNDO` → Recycle Bin） | XDG 回收站目录 |
+| `Trash` | 回收站目录 + `move_to_trash` 动作 | `~/.Trash`、归档移动 | `SHFileOperationW`（`FO_DELETE` + `FOF_ALLOWUNDO` → Recycle Bin） | XDG 规范（`files/` + `info/` + `.trashinfo`、冲突后缀；挂载点 `.Trash-$uid` TODO） |
 | `SpotlightIndex` | 补充文件查找 | `mdfind`（带超时） | 空 | 空 |
-| `ProcessControl` | 终止运行中的应用 | `ps` + `kill -TERM`（按 bundle 前缀限定） | `tasklist` + `taskkill /F /T /IM` | 无操作 |
-| `DevEnvPaths` | 开发环境缓存表 | macOS 表 | `%LOCALAPPDATA%`/`%APPDATA%` 表（13 个环境） | Linux XDG 表 |
-| `PackageManagers` | 各包管理器的卸载/自动移除 | Homebrew | winget | 暂无 |
+| `ProcessControl` | 终止运行中的应用 | `ps` + `kill -TERM`（按 bundle 前缀限定） | `tasklist` + `taskkill /F /T /IM` | `pgrep -f` + `kill -TERM` |
+| `DevEnvPaths` | 开发环境缓存表 | macOS 表（25 个环境） | `%LOCALAPPDATA%`/`%APPDATA%` 表（13 个环境） | XDG 表 + 包管理器缓存（22 个环境） |
+| `PackageManagers` | 各包管理器的卸载/自动移除 | Homebrew | winget | apt |
 | `PluginPaths` | 插件类别表 | 18 个 macOS 类别 | 空 | 空 |
-| `AppDiscovery` | 已安装应用枚举 | `.app` 遍历（scan.rs） | 注册表卸载项 + 开始菜单 `.lnk` | `.app` 遍历（scan.rs） |
+| `AppDiscovery` | 已安装应用枚举 | `.app` 遍历（scan.rs） | 注册表卸载项 + 开始菜单 `.lnk` | `.desktop` 文件（desktop.rs） |
 
-`platform/mod.rs` 暴露 `pub type Adapter`（由 `cfg(target_os)` 选定：macOS 为 `macos::MacOsAdapter`、Windows 为 `windows::WindowsAdapter`、其他平台为 `fallback::FallbackAdapter`）以及全局访问器 `adapter()`。引擎代码调用 `crate::platform::adapter()` 并在作用域内引入 trait——逻辑本身从不按 OS 分支，因此新增平台只需新写 trait 实现，无需改动引擎。
+`platform/mod.rs` 暴露 `pub type Adapter`（由 `cfg(target_os)` 选定：macOS 为 `macos::MacOsAdapter`、Windows 为 `windows::WindowsAdapter`、其他平台为 `linux::LinuxAdapter`）以及全局访问器 `adapter()`。引擎代码调用 `crate::platform::adapter()` 并在作用域内引入 trait——逻辑本身从不按 OS 分支，因此新增平台只需新写 trait 实现，无需改动引擎。
 
 macOS 实现进一步拆分：
 - `platform/macos.rs` — 路径、Spotlight（`mdfind`）、进程控制（`ps`/`kill`）、`getconf`
@@ -88,7 +88,7 @@ programfiles 根、local/roaming/appdata、bin/program、microsoft/windows…）
 
 | 模块 | 用途 |
 |---|---|
-| `scan.rs` | 枚举已安装应用（bundle identifier 读取、符号链接安全去重、`com.alienator88.Pearcleaner` 自身排除；macOS/fallback 的发现委托到这里） |
+| `scan.rs` | 枚举已安装应用（bundle identifier 读取、符号链接安全去重、`com.alienator88.Pearcleaner` 自身排除；macOS 的发现委托到这里） |
 | `search.rs` | 查找应用的全部关联文件：带深度规则的目录遍历、供应商目录回退、名称匹配、离群项、最终集合去重 |
 | `matcher.rs` / `conditions.rs` | 应跳过规则与按应用的特定条件（bundle id 精确匹配、包含/排除强制列表） |
 | `orphan.rs` | 检测已卸载应用留下的文件（macOS：预建 UUID→bundle id 映射；Windows：path 派生 needle + 系统目录过滤——见上文） |
@@ -110,6 +110,7 @@ programfiles 根、local/roaming/appdata、bin/program、microsoft/windows…）
 ## 测试策略
 
 - **模块内单元测试**覆盖纯逻辑，用固定字节/字符串和 `tempfile` 临时目录树——无需真实系统状态。
-- **Linux + Windows 交叉检查**（CI 中 `cargo check --target x86_64-unknown-linux-gnu` 与 `--target x86_64-pc-windows-gnu`）保证核心真正可移植：任何只在 macOS 上能编译的内容都被限制在适配器层。
+- **Linux 原生 job** 在 `ubuntu-latest` 上运行 fmt/clippy/test（apt 解析、XDG 回收站、`.desktop` 发现、dev-env 表全部真实运行），push 时产出 release artifact。
+- **Windows 交叉检查**（CI 中 `cargo check --target x86_64-pc-windows-gnu`）保证核心真正可移植：任何只在 macOS 上能编译的内容都被限制在适配器层。
 - **Windows 原生 job** 在 `windows-latest` 上运行全量套件 + Windows 专属集成测试：创建、枚举并删除临时 HKCU 卸载键；经 `SHFileOperationW` 把临时文件移入 Recycle Bin；从固定输出解析 `winget list`。
 - **macOS 实测回归**将输出与参考实现比对（测试应用上 9/9 与 17/17 文件集完全一致）。

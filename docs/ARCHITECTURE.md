@@ -30,7 +30,7 @@ flowchart TB
             TRAITS["traits<br/><br/>SystemPaths · AppMetadata · Trash<br/>SpotlightIndex · ProcessControl<br/>DevEnvPaths · PackageManagers<br/>PluginPaths · AppDiscovery"]
             MAC["macOS impl<br/><br/>macos.rs · homebrew.rs<br/>lipo.rs — universal-binary thinning<br/>cfg(macos) only: Darwin format"]
             WIN["Windows impl<br/><br/>windows.rs · win_registry.rs<br/>win_trash.rs · winget.rs<br/>cfg(windows) only: registry / shell API"]
-            FB["fallback impl<br/><br/>fallback.rs<br/>XDG defaults"]
+            LINUX["Linux impl<br/><br/>linux.rs · apt.rs<br/>XDG trash · .desktop discovery<br/>cfg(other) only"]
         end
     end
 
@@ -38,7 +38,7 @@ flowchart TB
     LOGIC -->|"adapter() + trait calls"| TRAITS
     TRAITS -->|"cfg!(target_os = macos)"| MAC
     TRAITS -->|"cfg!(target_os = windows)"| WIN
-    TRAITS -->|"other targets"| FB
+    TRAITS -->|"other targets"| LINUX
 ```
 
 ## Crates
@@ -52,21 +52,21 @@ flowchart TB
 
 Every OS-dependent behavior is a trait in `apios-core/src/platform/`:
 
-| Trait | Responsibility | macOS impl | Windows impl | Fallback impl |
+| Trait | Responsibility | macOS impl | Windows impl | Linux impl |
 |---|---|---|---|---|
-| `SystemPaths` | home, caches, temp, app folders | real paths | `USERPROFILE` / `%APPDATA%` / `%LOCALAPPDATA%` family | XDG defaults |
+| `SystemPaths` | home, caches, temp, app folders | real paths | `USERPROFILE` / `%APPDATA%` / `%LOCALAPPDATA%` family | XDG Base Directory |
 | `AppMetadata` | entitlements, team identifier | codesign | `None` (registry holds the metadata) | `None` |
-| `Trash` | trash dir + `move_to_trash` action | `~/.Trash`, archive move | `SHFileOperationW` (`FO_DELETE` + `FOF_ALLOWUNDO` → Recycle Bin) | XDG trash dir |
+| `Trash` | trash dir + `move_to_trash` action | `~/.Trash`, archive move | `SHFileOperationW` (`FO_DELETE` + `FOF_ALLOWUNDO` → Recycle Bin) | XDG trash spec (`files/` + `info/` + `.trashinfo`, conflict suffixes; mount-point `.Trash-$uid` TODO) |
 | `SpotlightIndex` | supplemental file lookup | `mdfind` (with timeout) | empty | empty |
-| `ProcessControl` | terminate a running app | `ps` + `kill -TERM` (bundle-prefix scoped) | `tasklist` + `taskkill /F /T /IM` | no-op |
-| `DevEnvPaths` | dev-environment cache tables | macOS table | `%LOCALAPPDATA%`/`%APPDATA%` table (13 envs) | Linux XDG table |
-| `PackageManagers` | per-manager uninstall/autoremove | Homebrew | winget | none yet |
+| `ProcessControl` | terminate a running app | `ps` + `kill -TERM` (bundle-prefix scoped) | `tasklist` + `taskkill /F /T /IM` | `pgrep -f` + `kill -TERM` |
+| `DevEnvPaths` | dev-environment cache tables | macOS table (25 envs) | `%LOCALAPPDATA%`/`%APPDATA%` table (13 envs) | XDG table + package-manager caches (22 envs) |
+| `PackageManagers` | per-manager uninstall/autoremove | Homebrew | winget | apt |
 | `PluginPaths` | plugin category table | 18 macOS categories | empty | empty |
-| `AppDiscovery` | installed-app enumeration | `.app` walk (scan.rs) | registry uninstall entries + Start Menu `.lnk` | `.app` walk (scan.rs) |
+| `AppDiscovery` | installed-app enumeration | `.app` walk (scan.rs) | registry uninstall entries + Start Menu `.lnk` | `.desktop` files (desktop.rs) |
 
 `platform/mod.rs` exposes a `pub type Adapter` chosen by `cfg(target_os)`
 (`macos::MacOsAdapter` on macOS, `windows::WindowsAdapter` on Windows,
-`fallback::FallbackAdapter` elsewhere), and a global `adapter()` accessor.
+`linux::LinuxAdapter` elsewhere), and a global `adapter()` accessor.
 Engine code calls `crate::platform::adapter()` with the trait in scope — the
 logic never branches on the OS itself, so a new platform only needs new trait
 implementations, not changes to the engine.
@@ -87,6 +87,18 @@ The Windows implementation is hand-written FFI only (zero third-party deps):
 - `platform/winget.rs` — the winget CLI wrapper (all packages map to
   `Formula`; no dependents/autoremove concept)
 
+The Linux implementation (previously a bare "compiles only" fallback,
+promoted to a first-class adapter):
+- `platform/linux.rs` — `LinuxAdapter` (XDG paths, XDG trash via the
+  `trash::xdg` core module: `files/` + `info/` + `.trashinfo`,
+  conflict suffixes, info-failure rollback; mount-point `.Trash-$uid`
+  is a documented TODO), `.desktop` app discovery, `pgrep -f`
+  process control, dev-env table (22 envs incl. package-manager caches),
+  trash exclusion via `conditions::is_in_trash` (component-level)
+- `platform/apt.rs` — the apt wrapper (`apt list --installed`,
+  `apt-cache rdepends --installed`, `remove -y`, `autoremove`; sudo
+  hint on permission failures, no implicit elevation)
+
 The Windows orphan search derives its needles from the executable paths
 themselves — up to 3 ancestor directory names + the file stem of every
 discovered app (`Tencent\Weixin\Weixin.exe` → `weixin` + `tencent`), threshold
@@ -103,7 +115,7 @@ what keeps `clean-orphan` away from system components.
 
 | Module | Purpose |
 |---|---|
-| `scan.rs` | Enumerate installed apps (bundle-identifier reading, symlink-safe dedup, `com.alienator88.Pearcleaner` self-exclusion; macOS/fallback discovery delegates here) |
+| `scan.rs` | Enumerate installed apps (bundle-identifier reading, symlink-safe dedup, `com.alienator88.Pearcleaner` self-exclusion; macOS discovery delegates here) |
 | `search.rs` | Find all related files of an app: directory walk with depth rules, vendor-directory fallback, name matching, outliers, final set dedup |
 | `matcher.rs` / `conditions.rs` | Should-skip rules and per-app specific conditions (bundle-id exact matching, include/exclude force lists) |
 | `orphan.rs` | Detect files left behind by uninstalled apps (macOS: prebuilt UUID→bundle-id map; Windows: path-derived needles + system-dir filtering — see above) |
@@ -142,10 +154,12 @@ Three layers protect against destructive mistakes:
 
 - **Unit tests in-module** cover the pure logic with fixture bytes/strings and
   `tempfile` temp trees — no live system state needed.
-- **Linux + Windows cross-check** (`cargo check --target
-  x86_64-unknown-linux-gnu` and `--target x86_64-pc-windows-gnu` in CI) keeps
-  the core truly portable: anything that only compiles on macOS is confined to
-  the adapter layer.
+- **Linux native job** runs fmt/clippy/test on `ubuntu-latest` (apt parsers,
+  XDG trash, `.desktop` discovery, dev-env table all run for real) and
+  produces the release artifact on push.
+- **Windows cross-check** (`cargo check --target x86_64-pc-windows-gnu` in
+  CI) keeps the core truly portable: anything that only compiles on macOS is
+  confined to the adapter layer.
 - **Windows native job** runs the full suite plus Windows-only integration
   tests on `windows-latest`: a temporary HKCU uninstall key is created,
   enumerated, and deleted; a temp file is moved to the Recycle Bin via
