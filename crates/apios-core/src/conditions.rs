@@ -1,4 +1,4 @@
-//! 每应用条件表 / 跳过表 —— 忠实移植原版 `Conditions.swift`
+//! 每应用条件表 / 跳过表 —— 按应用（bundle id）归类的包含/排除/跳过规则
 //! 注意：bundle_id/include/exclude 在构造时 pearFormat；force 路径仅保留磁盘上存在的
 
 use std::path::PathBuf;
@@ -31,7 +31,7 @@ fn cond(
     }
 }
 
-/// 每应用 include/exclude/force 条件（Conditions.swift:45-202）
+/// 每应用 include/exclude/force 条件
 pub fn conditions() -> Vec<Condition> {
     let home = crate::platform::adapter().home();
     vec![
@@ -203,7 +203,7 @@ pub fn conditions() -> Vec<Condition> {
     ]
 }
 
-/// 系统文件/文件夹跳过条件（Conditions.swift:207-213）
+/// 系统文件/文件夹跳过条件
 pub fn skip_conditions() -> Vec<SkipCondition> {
     let home = crate::platform::adapter().home();
     vec![SkipCondition {
@@ -237,7 +237,7 @@ pub fn skip_conditions() -> Vec<SkipCondition> {
     }]
 }
 
-/// Library 深度搜索时排除的系统目录（Conditions.swift:218-256）
+/// Library 深度搜索时排除的系统目录
 pub fn skip_deep_search() -> std::collections::HashSet<String> {
     const LIST: &[&str] = &[
         // Core System
@@ -379,7 +379,7 @@ pub fn skip_deep_search() -> std::collections::HashSet<String> {
     LIST.iter().map(|s| s.to_string()).collect()
 }
 
-/// 孤儿搜索时跳过的名称列表（Conditions.swift:260）
+/// 孤儿搜索时跳过的名称列表
 pub fn skip_reverse() -> std::collections::HashSet<String> {
     const LIST: &[&str] = &[
         "apple",

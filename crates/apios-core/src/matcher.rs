@@ -1,5 +1,4 @@
-//! 启发式匹配引擎 —— 忠实移植原版 `specificCondition` / `shouldSkipItem`
-//! (old/Pearcleaner/Logic/AppPathsFetch.swift:294-434)
+//! 启发式匹配引擎 —— 判定路径是否属于应用相关文件（条件表 + 前缀匹配 + 豁免）
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -9,7 +8,7 @@ use crate::format::pear_format;
 use crate::identifiers::CachedIdentifiers;
 use crate::model::{AppInfo, Sensitivity, SkipCondition};
 
-/// shouldSkipItem 移植：集合成员 / 路径前缀 / 名称前缀 + 豁免
+/// 跳过判定：集合成员 / 路径前缀 / 名称前缀 + 豁免
 pub fn should_skip_item(
     normalized_item_name: &str,
     path: &Path,
@@ -44,7 +43,7 @@ pub fn should_skip_item(
     false
 }
 
-/// specificCondition 移植（AppPathsFetch.swift:323-434）
+/// 每应用条件判定（specificCondition 语义）
 #[allow(clippy::too_many_arguments)]
 pub fn specific_condition(
     normalized_item_name: &str,
@@ -110,7 +109,7 @@ pub fn specific_condition(
         }
     }
 
-    // --- 每应用条件（先 exclude 后 include，AppPathsFetch.swift:369-378）---
+    // --- 每应用条件（先 exclude 后 include）---
     // formatted_bundle_id 为空时 contains("") 恒 true → 每个条件都被当作命中，
     // 其 include 关键词可能误伤无关路径 —— 空 id 直接跳过条件循环
     if ids.use_bundle_identifier && !ids.formatted_bundle_id.is_empty() {
@@ -213,7 +212,7 @@ pub fn specific_condition(
         || stripped_app_name_match
 }
 
-/// 从 "appmanifest_1289310.acf" 提取 "1289310"（AppPathsFetch.swift:437-445）
+/// 从 "appmanifest_1289310.acf" 提取 "1289310"
 fn extract_game_id(filename: &str) -> Option<String> {
     let mut parts = filename.split('_');
     parts.next()?; // "appmanifest"
@@ -221,7 +220,7 @@ fn extract_game_id(filename: &str) -> Option<String> {
     Some(id_with_ext.split('.').next()?.to_string())
 }
 
-/// 从 Steam 启动器 run.sh 提取游戏 ID（steam://run/<id>，AppPathsFetch.swift:448-469）
+/// 从 Steam 启动器 run.sh 提取游戏 ID（steam://run/<id>）
 fn get_steam_game_id(app_path: &Path) -> Option<String> {
     let run_sh = app_path.join("Contents/MacOS/run.sh");
     let content = std::fs::read_to_string(run_sh).ok()?;

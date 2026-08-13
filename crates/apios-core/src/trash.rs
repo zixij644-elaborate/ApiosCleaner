@@ -1,11 +1,10 @@
-//! 回收站删除 + 撤销 —— 移植原版 `FileManagerUndo.deleteFiles` 的 mv-bundle 语义
-//! (old/Pearcleaner/Logic/UndoManager.swift:22-174)
+//! 回收站删除 + 撤销 —— mv-bundle 语义（时间戳归档目录 + 重名后缀 + 可还原）
 //!
 //! 语义要点：
 //! - 在回收站目录（平台适配层，macOS 为 ~/.Trash）下创建 `<App名>_<yyyy-MM-dd_HH-mm-ss>` 归档目录
 //! - 逐文件移动，重名时追加 -1/-2 后缀
 //! - 安全校验阻止删除系统关键路径
-//! - 原版用 /bin/mv 链（支持 root helper）；PoC 用 fs::rename，失败返回 false
+//! - POSIX：fs::rename 移入归档目录（失败进 failed 列表）；Windows 覆写走 SHFileOperationW（系统回收站）
 
 use std::path::{Path, PathBuf};
 
@@ -13,9 +12,9 @@ use chrono::Local;
 
 use crate::platform::{SystemPaths, Trash};
 
-/// isWritableFile 移植（CLI.swift uninstall-all/remove-orphaned 的受保护文件检测）：
+/// 受保护文件检测：
 /// POSIX rename 语义 —— 需要的是**父目录**可写，而非条目自身（条目只读不影响 mv）。
-/// 原版 FileManager.isWritableFile 测条目本身 → 只读文件被误报为受保护。
+/// 只测父目录可写（测条目本身会把只读文件误报为受保护）。
 /// root 恒可写 → sudo 下不触发受保护分支。
 ///
 /// Windows：恒 true（注册表卸载的应用通常可写；只读属性不阻 SHFileOperation 移动；
@@ -107,8 +106,8 @@ fn normalize_absolute(path: &str) -> Option<String> {
     }
 }
 
-/// 路径安全校验（UndoManager.swift:24-60）。
-/// 原版按原始字符串精确匹配 → `..`/`//`/尾部斜杠可绕过 critical 表；
+/// 路径安全校验。
+/// 若按原始字符串精确匹配，`..`/`//`/尾部斜杠可绕过 critical 表；
 /// 这里先做词法归一化再匹配，再叠加 home 根与（POSIX 专属）{home}/Applications。
 /// critical 表来自适配层（SystemPaths::critical_paths，平台路径数据归平台），
 /// 子路径（/usr/local、{home}/Library/...）仍放行 —— 是合法删除目标。
@@ -170,8 +169,8 @@ pub fn validate_path(path: &str) -> bool {
 /// （重名 -N 后缀 / 跨卷 copy 回退）。Windows 回收站无目录模型，
 /// 由 WindowsAdapter 覆写走 SHFileOperationW，本函数仅 POSIX 语义。
 ///
-/// - `urls`: 待删除路径（顺序无要求，原版为数组）
-/// - `bundle_name`: 归档目录名前缀（原版取 AppState.appInfo.appName，CLI 传应用名）
+/// - `urls`: 待删除路径（顺序无要求）
+/// - `bundle_name`: 归档目录名前缀（CLI 传应用名）
 pub fn move_to_trash_dir(
     urls: &[PathBuf],
     bundle_name: Option<&str>,
@@ -188,7 +187,7 @@ pub fn move_to_trash_dir(
         return result;
     }
 
-    // 归档目录名（UndoManager.swift:85-104）。
+    // 归档目录名。
     // 防御：应用名可能含 "/"（嵌套路径），替换为 "_" 避免破坏归档目录结构
     let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let folder_name = match bundle_name.filter(|n| !n.is_empty()) {
@@ -200,7 +199,7 @@ pub fn move_to_trash_dir(
     };
     let bundle_folder = trash_dir.join(format!("{folder_name}_{timestamp}"));
 
-    // 建目录 + 逐文件移动（重名后缀，UndoManager.swift:109-132）
+    // 建目录 + 逐文件移动（重名后缀）
     if std::fs::create_dir_all(&bundle_folder).is_err() {
         // 归档目录建不起来 = 整个操作失败（回收站不可用/权限）。此前返回全空
         // 结果会被 main.rs 误判为 "Nothing to delete" 而 exit 0 —— 实际什么都没删
@@ -257,7 +256,7 @@ pub fn move_to_trash_dir(
     result
 }
 
-/// 删除文件到回收站（CLI 版 deleteFiles，UndoManager.swift:62-174）。
+/// 删除文件到回收站（CLI 版 deleteFiles）。
 ///
 /// 安全校验分区（平台无关）→ 委托平台适配器的 Trash::move_to_trash
 /// （macOS/Linux 默认走 move_to_trash_dir 归档；Windows 走系统回收站 API）。
@@ -278,7 +277,7 @@ pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult
     result
 }
 
-/// 撤销：从回收站移回原位 + 移除归档目录（restoreFiles 简化版，UndoManager.swift:176-227）
+/// 撤销：从回收站移回原位 + 移除归档目录（restoreFiles 简化版）
 pub fn restore_files(file_pairs: &[FilePair]) -> bool {
     let mut all_ok = true;
     for pair in file_pairs {

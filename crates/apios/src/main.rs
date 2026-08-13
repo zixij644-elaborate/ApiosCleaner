@@ -753,7 +753,7 @@ fn cmd_dev_clean(cli: &Cli, env: Option<&str>) {
         .filter(|p| p.is_dir())
         .collect();
     dedup_nested(&mut dirs);
-    // 清理语义 = 删目录内容（原版 deleteFolderContents），保留顶层目录
+    // 清理语义 = 删目录内容，保留顶层目录
     let contents: Vec<PathBuf> = dirs.iter().flat_map(|d| dir_contents(d)).collect();
     if contents.is_empty() {
         println!("{}: nothing to clean.", env.name);
@@ -989,7 +989,7 @@ fn cmd_pkg_autoremove(cli: &Cli, pm: &dyn PackageManager) {
     println!("Autoremoved {} package(s).", orphans.len());
 }
 
-// ---------- 插件（PluginsView 移植） ----------
+// ---------- 插件 ----------
 
 /// 分类选择：null/"all" → 全部分类；否则大小写不敏感匹配单个分类
 fn resolve_plugin_categories(

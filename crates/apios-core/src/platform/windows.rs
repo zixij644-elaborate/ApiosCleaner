@@ -209,7 +209,7 @@ impl Trash for WindowsAdapter {
 }
 
 impl ProcessControl for WindowsAdapter {
-    /// taskkill 移植（对齐 macOS kill_running_app 的"终止后复查"语义）：
+    /// taskkill 终止（对齐 macOS kill_running_app 的"终止后复查"语义）：
     /// tasklist 按镜像名计数 → 全部终止（/F 强制 /T 连带子进程）→ 复查差值。
     /// 仅对 .exe 生效（.lnk 发现的便携应用无进程名可映射 → 0）。
     fn kill_running_app(&self, app: &AppInfo) -> u32 {

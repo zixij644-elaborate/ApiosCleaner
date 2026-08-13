@@ -5,7 +5,7 @@
 //! - `~` 展开、`*` 通配段展开、目录大小递归统计、嵌套去重、人类可读大小
 //! - `find_env` / `env_sizes` 从当前平台适配器取路径表
 //!
-//! 清理语义（原版 deleteFolderContents）：把目录**内容**移入回收站，保留目录本身。
+//! 清理语义：把目录**内容**移入回收站，保留目录本身。
 //! 路径表收紧原则（2026-08-12）：只列**可再生缓存**（DerivedData、各 cache、
 //! registry 等），不列工具本体（~/.cargo、~/.nvm、conda 发行版）、配置（Application
 //! Support 根、.config 根、User）、用户数据（Xcode Archives、模拟器设备）。
@@ -16,7 +16,7 @@ use rayon::prelude::*;
 
 use crate::platform::{DevEnvPaths, SystemPaths};
 
-/// 单个开发环境（原版 PathEnv）
+/// 单个开发环境
 #[derive(Debug, Clone)]
 pub struct DevEnv {
     pub name: String,
@@ -79,7 +79,7 @@ pub fn expand_globs(pattern: &Path) -> Vec<PathBuf> {
     results
 }
 
-/// 目录大小（递归求和，跳过隐藏项 —— 原版 skipsHiddenFiles）。
+/// 目录大小（递归求和，跳过隐藏项）。
 /// 用 `file_type()`（lstat 语义）判定目录 —— `metadata()` 跟随符号链接，
 /// 指向树内祖先的链接会让递归永不终止。
 pub fn dir_size(path: &Path) -> u64 {
@@ -173,7 +173,7 @@ pub fn find_env(name: &str) -> Option<DevEnv> {
         .find(|e| e.name.to_lowercase() == lower)
 }
 
-/// 人类可读大小（原版 ByteCountFormatter 风格）
+/// 人类可读大小（ByteCountFormatter 风格）
 pub fn fmt_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes as f64;

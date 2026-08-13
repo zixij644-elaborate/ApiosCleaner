@@ -1,8 +1,8 @@
-//! 核心数据模型 —— 对应原版 AppInfo、SearchSensitivityLevel、Condition 等
+//! 核心数据模型 —— AppInfo / Sensitivity / Condition / SkipCondition 等共享类型
 
 use std::path::PathBuf;
 
-/// 搜索敏感度 —— 对应原版 `SearchSensitivityLevel`（严格/增强/深度）
+/// 搜索敏感度（严格/增强/深度）
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Sensitivity {
     Strict,
@@ -23,7 +23,7 @@ impl Sensitivity {
     }
 }
 
-/// 应用信息 —— PoC 只保留 CLI/扫描所需字段（对应原版 AppInfo 的子集）
+/// 应用信息 —— CLI/扫描所需字段
 #[derive(Clone, Debug)]
 pub struct AppInfo {
     /// 应用 bundle 路径，如 /Applications/Foo.app
@@ -38,7 +38,7 @@ pub struct AppInfo {
     pub wrapped: bool,
 }
 
-/// 单条匹配结果（对应原版 findPathsCLI 返回的 URL 集合）
+/// 单条匹配结果
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MatchedFile {
     pub path: PathBuf,
@@ -50,7 +50,7 @@ impl From<PathBuf> for MatchedFile {
     }
 }
 
-/// 每应用条件 —— 对应原版 `Condition`（old/Pearcleaner/Logic/Conditions.swift:10-34）
+/// 每应用条件 —— 按应用归类的匹配/排除规则
 /// 注意：bundle_id / include / exclude 在构造时已 pearFormat；force 路径仅保留存在的
 #[derive(Clone, Debug)]
 pub struct Condition {
@@ -61,7 +61,7 @@ pub struct Condition {
     pub exclude_force: Vec<PathBuf>,
 }
 
-/// 跳过条件 —— 对应原版 `SkipCondition`（Conditions.swift:36-40）
+/// 跳过条件
 #[derive(Clone, Debug)]
 pub struct SkipCondition {
     pub skip_prefix: Vec<String>,

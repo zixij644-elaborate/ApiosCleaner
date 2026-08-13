@@ -1,6 +1,6 @@
 //! macOS 适配器 —— 原 locations.rs / app_info.rs 中的 macOS 专属逻辑
 //!
-//! - 系统路径：~/Library 布局（原 Locations.swift）+ darwin 缓存目录（getconf）
+//! - 系统路径：~/Library 布局+ darwin 缓存目录（getconf）
 //! - 元数据：codesign 提取 entitlements / TeamIdentifier
 //! - 回收站：~/.Trash
 
@@ -39,9 +39,8 @@ impl MacOsAdapter {
 }
 
 /// getconf DARWIN_USER_CACHE_DIR / DARWIN_USER_TEMP_DIR
-/// darwin 用户缓存/临时目录（原版 getconf DARWIN_USER_*）。
-/// 直接调 /usr/bin/getconf —— 原版经 `bash -c "echo $(getconf ...) ..."` 包装，
-/// 多一层 shell 且输出拼接脆弱，无必要。
+/// darwin 用户缓存/临时目录（getconf DARWIN_USER_*）。
+/// 直接调 /usr/bin/getconf（不经 shell 包装，避免转义与拼接问题）。
 fn darwin_ct() -> (String, String) {
     (
         getconf("DARWIN_USER_CACHE_DIR"),
@@ -114,7 +113,7 @@ impl SystemPaths for MacOsAdapter {
         self.temp_dir.clone()
     }
 
-    /// apps.paths（Locations.swift:58-122）
+    /// apps.paths
     fn apps_paths(&self) -> Vec<String> {
         let home = &self.home;
         let mut apps_paths = vec![
@@ -195,7 +194,7 @@ impl SystemPaths for MacOsAdapter {
         apps_paths
     }
 
-    /// reverse.paths（Locations.swift:133-156）
+    /// reverse.paths
     fn reverse_paths(&self) -> Vec<String> {
         let home = &self.home;
         vec![
@@ -252,7 +251,7 @@ impl SystemPaths for MacOsAdapter {
 }
 
 impl AppMetadata for MacOsAdapter {
-    /// getEntitlements 移植（AppInfoFetch.swift:691-786）：
+    /// entitlements 提取：
     /// application-groups + iCloud 容器标识 + MacOS 二进制名（≥5 字符，排除表）+ 嵌套 .app
     fn entitlements(&self, app_path: &Path) -> Option<Vec<String>> {
         let mut results: Vec<String> = Vec::new();
@@ -370,7 +369,7 @@ impl AppMetadata for MacOsAdapter {
         }
     }
 
-    /// getTeamIdentifier 移植：codesign -d -vvv 的 stderr 中 TeamIdentifier=<ID>
+    /// 团队标识符提取：codesign -d -vvv 的 stderr 中 TeamIdentifier=<ID>
     fn team_identifier(&self, app_path: &Path) -> Option<String> {
         let out = Command::new("codesign")
             .args(["-d", "-vvv", &app_path.to_string_lossy()])
@@ -428,11 +427,11 @@ fn running_bundle_pids(bundle_prefix: &str) -> Vec<u32> {
 }
 
 impl ProcessControl for MacOsAdapter {
-    /// killApp 移植（原版 GUI 用 NSRunningApplication terminate）。
+    /// 终止运行中的应用（NSRunningApplication terminate 语义的 CLI 实现）。
     /// 按 **bundle 路径前缀**限定进程（ps argv[0] 匹配），逐个 kill -TERM 优雅终止；
     /// 返回实际终止数（kill 后复查存活，复查失败按 0 计）。
     ///
-    /// 修原版/旧实现两处缺陷：
+    /// 相对朴素实现修了两处缺陷：
     /// - `killall <可执行名>` 会连带终止所有同名进程（VS Code/Slack/Discord 的
     ///   可执行名都是 "Electron"）——bundle 前缀只命中本 app 的进程；
     /// - `pgrep -x` 受 macOS 进程名 15 字符截断限制（长可执行名永远匹配不到）——
@@ -456,12 +455,12 @@ impl ProcessControl for MacOsAdapter {
     }
 }
 
-/// 开发环境路径表（原版 PathLibrary 收紧版，macOS 布局）。
+/// 开发环境路径表（收紧版，macOS 布局）。
 /// 收紧原则（2026-08-12）：只列**可再生缓存**——DerivedData、各 cache 目录、
 /// registry 缓存等；移除工具本体（~/.cargo、~/.nvm、conda 发行版、pyenv、gem）、
 /// 配置（Application Support 根、User、.config 根）、用户数据（Xcode Archives、
 /// CoreSimulator 设备、Android AVD）。
-/// 与原版相比移除的环境：Conda（无安全缓存条目）、Ruby Gems（无独立缓存目录）。
+/// 移除的环境：Conda（无安全缓存条目）、Ruby Gems（无独立缓存目录）。
 fn dev_envs_table() -> Vec<DevEnv> {
     let p = |s: &str| s.to_string();
     vec![
@@ -622,7 +621,7 @@ impl DevEnvPaths for MacOsAdapter {
     }
 }
 
-/// 插件分类路径表（原版 Locations.plugins.subcategories，18 类）。
+/// 插件分类路径表（18 类）。
 /// `~` 在 `plugin_categories` 中展开为 home；扫描只列一层目录（原版语义）。
 fn plugin_categories_table(home: &str) -> Vec<PluginCategory> {
     let p = |s: &str| s.to_string();
@@ -759,7 +758,7 @@ fn escape_predicate_value(value: &str) -> String {
     value.replace('\'', "''")
 }
 
-/// Strict/Enhanced 谓词（AppPathsFetch.swift:500-510）。
+/// Strict/Enhanced 谓词。
 /// Deep 的多元数据组合谓词（Comment/Creator/Copyright/TextContent 等）属 GUI 功能，暂不实现。
 fn build_predicate(app_name: &str, bundle_id: &str, sensitivity: Sensitivity) -> Option<String> {
     let name = escape_predicate_value(app_name);
@@ -772,11 +771,11 @@ fn build_predicate(app_name: &str, bundle_id: &str, sensitivity: Sensitivity) ->
             "kMDItemDisplayName CONTAINS[cd] '{name}' || kMDItemPath CONTAINS[cd] '{name}' \
              || kMDItemDisplayName CONTAINS[cd] '{bundle}' || kMDItemPath CONTAINS[cd] '{bundle}'"
         )),
-        Sensitivity::Deep => None, // TODO: 多词 AND 谓词等（AppPathsFetch.swift:516-577）
+        Sensitivity::Deep => None, // TODO: 多词 AND 谓词等
     }
 }
 
-/// Strict 后过滤（AppPathsFetch.swift:601-607）：
+/// Strict 后过滤：
 /// 末段组件 pearFormat 后必须等于 appName/bundleID 的 pearFormat
 fn strict_post_filter(paths: Vec<PathBuf>, app_name: &str, bundle_id: &str) -> Vec<PathBuf> {
     let name_formatted = pear_format(app_name);
@@ -795,7 +794,7 @@ fn strict_post_filter(paths: Vec<PathBuf>, app_name: &str, bundle_id: &str) -> V
 }
 
 impl SpotlightIndex for MacOsAdapter {
-    /// mdfind 移植（替代 NSMetadataQuery）：-onlyin 用户主目录 + 谓词，5s 超时，500 条上限
+    /// Spotlight 补充查询（mdfind）：-onlyin 用户主目录 + 谓词，5s 超时，500 条上限
     fn spotlight_supplemental_paths(
         &self,
         app_name: &str,
@@ -849,7 +848,7 @@ impl SpotlightIndex for MacOsAdapter {
             .map(PathBuf::from)
             .collect();
 
-        // 上限（AppPathsFetch.swift:610-612）
+        // 上限
         let paths = if paths.len() > 500 {
             paths.into_iter().take(500).collect()
         } else {

@@ -1,5 +1,4 @@
-//! 标识符预计算 —— 忠实移植原版 AppPathFinder.init 的 cachedIdentifiers
-//! (old/Pearcleaner/Logic/AppPathsFetch.swift:55-132)
+//! 标识符预计算 —— 匹配用的归一化标识符集合（bundle id / 应用名的格式化变体）
 
 use crate::format::{pear_format, stripping_trailing_digits};
 use crate::model::AppInfo;
@@ -20,7 +19,7 @@ pub struct CachedIdentifiers {
     pub formatted_base_bundle_id: Option<String>,
 }
 
-/// 常见 helper 后缀（AppPathsFetch.swift:108）
+/// 常见 helper 后缀
 const COMMON_SUFFIXES: &[&str] = &[
     "helper",
     "agent",
@@ -40,7 +39,7 @@ impl CachedIdentifiers {
     pub fn from_app_info(app: &AppInfo) -> CachedIdentifiers {
         let formatted_bundle_id = pear_format(&app.bundle_identifier);
 
-        // bundle 组件：过滤 "-"，小写（AppPathsFetch.swift:78-81）
+        // bundle 组件：过滤 "-"，小写
         let bundle_components: Vec<String> = app
             .bundle_identifier
             .split('.')
@@ -71,7 +70,7 @@ impl CachedIdentifiers {
             .map(|n| pear_format(&n.to_string_lossy().replace(".app", "")))
             .unwrap_or_default();
 
-        // 原版 isValidBundleIdentifier（AppPathsFetch.swift:481-487）
+        // bundle id 合法性判定（isValidBundleIdentifier 语义）
         let raw_components: Vec<&str> = app.bundle_identifier.split('.').collect();
         let use_bundle_identifier = if raw_components.len() == 1 {
             app.bundle_identifier.chars().count() >= 5
@@ -102,7 +101,7 @@ impl CachedIdentifiers {
 
         let formatted_team_identifier = app.team_identifier.as_ref().map(|t| pear_format(t));
 
-        // 基础 bundle ID：去掉 helper/agent 等后缀（AppPathsFetch.swift:105-120）
+        // 基础 bundle ID：去掉 helper/agent 等后缀
         let formatted_base_bundle_id = if raw_components.len() >= 4 {
             let last = raw_components.last().unwrap_or(&"").to_lowercase();
             if COMMON_SUFFIXES.contains(&last.as_str()) {
@@ -219,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_dash_filtered_components() {
-        // "-" 组件被过滤（原版 AppPathsFetch.swift:79-81）
+        // "-" 组件被过滤
         let ids = CachedIdentifiers::from_app_info(&app("com.example.-.Foo", "Example"));
         assert_eq!(ids.bundle_last_two_components, "examplefoo");
     }

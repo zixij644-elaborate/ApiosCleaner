@@ -1,5 +1,5 @@
-//! 孤儿文件反向搜索 —— 忠实移植原版 `ReversePathsSearcher`（CLI 路径）
-//! (old/Pearcleaner/Logic/ReversePathsFetch.swift:175-313)
+//! 孤儿文件反向搜索 —— 找出已卸载应用遗留的相关文件
+//! macOS：预构建 UUID→bundle-id 映射 + 名称启发式；Windows：exe 路径派生 needle + 系统目录过滤
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -11,7 +11,7 @@ use crate::locations::Locations;
 use crate::model::{AppInfo, Condition};
 use crate::platform::SystemPaths;
 
-/// UUID 容器目录名（ReversePathsFetch.swift:280-285 的 containerNameByUUID 正则）
+/// UUID 容器目录名（containerNameByUUID 正则）
 static UUID_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$").unwrap()
 });
@@ -76,7 +76,7 @@ fn is_supported_file_type(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// UUID（无连字符，32 位 hex）判断（ReversePathsFetch.swift:280-285）
+/// UUID（无连字符，32 位 hex）判断
 fn is_uuid_formatted(file_name: &str) -> bool {
     file_name.len() == 32 && file_name.chars().all(|c| c.is_ascii_hexdigit())
 }
@@ -239,7 +239,7 @@ impl ReversePathsSearcher {
         }
     }
 
-    /// 是否与已安装应用相关（ReversePathsFetch.swift:227-255）
+    /// 是否与已安装应用相关
     fn is_related_to_installed_app(&self, path: &Path, normalized_path: &str) -> bool {
         if self
             .needles_regex
@@ -267,7 +267,7 @@ impl ReversePathsSearcher {
         false
     }
 
-    /// 条件排除（ReversePathsFetch.swift:257-278）
+    /// 条件排除
     fn is_excluded_by_conditions(&self, normalized_path: &str) -> bool {
         for condition in &self.conditions {
             // 仅当条件对应的 app 已安装才生效（new() 预计算）
@@ -291,7 +291,7 @@ impl ReversePathsSearcher {
         false
     }
 
-    /// 单项处理（processItem，ReversePathsFetch.swift:207-225）
+    /// 单项处理（processItem）
     fn process_item(&mut self, scanned_item_name: &str, path: &Path) {
         let normalized_item_path = pear_format(&path.to_string_lossy());
 
@@ -392,7 +392,7 @@ impl ReversePathsSearcher {
         self.collection.push(path.to_path_buf());
     }
 
-    /// 单位置处理（processLocation，ReversePathsFetch.swift:194-205）
+    /// 单位置处理（processLocation）
     fn process_location(&mut self, location: &str) {
         let Ok(entries) = std::fs::read_dir(location) else {
             return;
@@ -403,7 +403,7 @@ impl ReversePathsSearcher {
         }
     }
 
-    /// CLI 主入口（reversePathsSearchCLI，ReversePathsFetch.swift:175-178）
+    /// CLI 主入口（reversePathsSearchCLI）
     pub fn reverse_paths_search_cli(&mut self) -> Vec<PathBuf> {
         let locations = self.locations.reverse_paths.clone();
         for location in locations {

@@ -1,6 +1,5 @@
-//! AppInfo 解析 —— 移植原版 `AppInfoFetcher` 的 fallback 路径（直接读 Info.plist）
+//! AppInfo 解析 —— 从应用 bundle 读取 Info.plist 构建 AppInfo
 //! 以及 `getEntitlements` / `getTeamIdentifier` / `isWebApp`
-//! (old/Pearcleaner/Logic/AppInfoFetch.swift:468-786)
 //!
 //! codesign 元数据提取已迁移到平台适配层（platform::AppMetadata），
 //! 本模块保留公共函数签名（核心/CLI 零改动）。
@@ -11,12 +10,12 @@ use std::sync::LazyLock;
 use crate::model::AppInfo;
 use crate::platform::AppMetadata;
 
-/// 容器 UUID 目录名（AppPathsFetch.swift:148-150 的 UUID 正则）
+/// 容器 UUID 目录名（UUID 正则）
 static CONTAINER_UUID_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$").unwrap()
 });
 
-/// 从应用 bundle 路径构建 AppInfo（PoC：直接解析 Info.plist，不用 Bundle 缓存）
+/// 从应用 bundle 路径构建 AppInfo（直接解析 Info.plist，无缓存）
 pub fn get_app_info(path: &Path) -> Option<AppInfo> {
     // wrapped 目录处理：<Container>.app/Wrapper/<RealApp>.app
     if path.join("Wrapper").is_dir() {
@@ -81,7 +80,7 @@ pub fn read_info_plist(path: &Path) -> Option<plist::Dictionary> {
     plist::from_bytes(&data).ok()
 }
 
-/// getEntitlements（AppInfoFetch.swift:691-786）—— 平台适配层实现（macOS: codesign）
+/// getEntitlements—— 平台适配层实现（macOS: codesign）
 pub fn get_entitlements(app_path: &Path) -> Option<Vec<String>> {
     crate::platform::adapter().entitlements(app_path)
 }
@@ -99,7 +98,7 @@ pub fn get_executable_name(path: &Path) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// 容器元数据解析（AppPathsFetch.swift:143-183）：
+/// 容器元数据解析：
 /// 扫描 ~/Library/Containers/<UUID>/.com.apple.containermanagerd.metadata.plist
 pub fn get_app_containers(home: &str, bundle_identifier: &str) -> Vec<PathBuf> {
     let containers_path = PathBuf::from(format!("{home}/Library/Containers"));

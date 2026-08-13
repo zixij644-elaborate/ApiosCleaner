@@ -1,5 +1,5 @@
-//! 已安装应用发现 —— 移植原版 `getSortedApps`（Logic.swift:133-350）的 PoC 子集
-//! 用于孤儿搜索的关联判断：遍历应用文件夹，收集 bundle ID / 应用名 / entitlements
+//! 已安装应用发现 —— 遍历应用文件夹，收集 bundle ID / 应用名 / entitlements
+//! macOS/fallback 的实现（Windows 走平台层 AppDiscovery：注册表卸载项 + 开始菜单）
 
 use std::path::Path;
 
@@ -8,10 +8,10 @@ use rayon::prelude::*;
 use crate::app_info;
 use crate::model::AppInfo;
 
-/// 清理器自身 bundle id（原版 Pearcleaner；重写后 GUI 化时替换为 ApiosCleaner 实际 id）
+/// 清理器自身 bundle id（扫描时自排除；GUI 化时替换为 ApiosCleaner 实际 id）
 const SELF_BUNDLE_ID: &str = "com.alienator88.Pearcleaner";
 
-/// 默认应用扫描文件夹（原版 FolderSettingsManager 默认值）。
+/// 默认应用扫描文件夹。
 /// macOS：.app bundle 目录三件套；其他平台：XDG 形态（Linux 应用为 .desktop
 /// 文件，desktop 解析属适配器 TODO —— 这里目录先取对，避免误导性查找路径）。
 pub fn default_app_folders(home: &str) -> Vec<String> {
@@ -46,7 +46,7 @@ pub fn default_app_folders(home: &str) -> Vec<String> {
     }
 }
 
-/// 受限应用（原版 isRestricted：Safari / self / /Applications/Utilities）
+/// 受限应用（Safari / self / /Applications/Utilities，扫描时排除）
 fn is_restricted(path: &Path, bundle_id: &str) -> bool {
     if bundle_id == "com.apple.Safari" {
         return true;

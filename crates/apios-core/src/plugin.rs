@@ -1,13 +1,9 @@
-//! 插件扫描 —— 原版 PluginsView（PluginCategory）的 CLI 化
-//!
-//! 原版 GUI 页：18 个插件分类（Audio / PreferencePanes / QuickLook / …），每分类
-//! 一组目录（用户级 + 系统级），逐项勾选删除。本模块移植扫描与过滤逻辑：
+//! 插件扫描 —— 18 个插件分类（Audio / PreferencePanes / QuickLook / …），每分类
+//! 一组目录（用户级 + 系统级）
 //! - 分类路径表由平台适配层提供（`PluginPaths` trait：macOS 全表，其他平台为空）
 //! - 过滤规则（should_include）为纯逻辑，按分类的后缀/目录语义判定
-//! - 扫描只列目录一层（原版 `contentsOfDirectory` 语义，不递归）
-//!
-//! 按重写准则修原版 2 处：目录条目大小实时统计（原版 GUI 懒加载，CLI 一次性给）；
-//! 隐藏文件过滤用统一规则（原版 skipsHiddenFiles）。
+//! - 扫描只列目录一层，不递归
+//! - 目录条目大小实时统计（CLI 一次性给出）；隐藏文件过滤用统一规则
 
 use std::path::{Path, PathBuf};
 
@@ -29,8 +25,8 @@ pub struct Plugin {
     pub size: u64,
 }
 
-/// 过滤规则（原版 `shouldIncludeFile` 移植）：该分类下，给定名字/类型的条目是否算插件。
-/// 大小写不敏感（原版 lowercase 后 hasSuffix 语义）。
+/// 过滤规则：该分类下，给定名字/类型的条目是否算插件。
+/// 大小写不敏感。
 pub fn should_include(name: &str, is_dir: bool, category: &str) -> bool {
     let n = name.to_lowercase();
     match category {

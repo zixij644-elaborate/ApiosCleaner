@@ -41,7 +41,7 @@ pub fn standard_library_subdirectories() -> HashSet<String> {
         .collect()
 }
 
-/// 搜索位置集合（apps.paths + reverse.paths，PoC 阶段插件路径暂不导出）
+/// 搜索位置集合（apps.paths + reverse.paths；插件路径在平台层 PluginPaths，不在此导出）
 pub struct Locations {
     pub home: String,
     pub cache_dir: String,

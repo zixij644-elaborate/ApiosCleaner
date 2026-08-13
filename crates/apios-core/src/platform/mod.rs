@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 
 use crate::model::{AppInfo, Sensitivity};
 
-/// 全盘索引补充查询（原版 spotlightSupplementalPaths，AppPathsFetch.swift:490-614）
+/// 全盘索引补充查询
 ///
 /// 路径表逐目录扫描有盲区（路径表外的深层残留），macOS 用 Spotlight 索引（mdfind）
 /// 做补充；其他平台暂无等价索引服务，返回空。
@@ -68,7 +68,7 @@ pub trait Trash {
     }
 }
 
-/// 卸载前终止运行中的应用（原版 GUI 的 killApp；每平台机制不同：
+/// 卸载前终止运行中的应用（每平台机制不同：
 /// macOS pgrep/killall、Linux pkill、Windows taskkill）
 pub trait ProcessControl {
     /// 终止应用进程，返回被终止的进程数（0 = 无运行实例）
@@ -108,7 +108,7 @@ pub trait PackageManager {
     fn autoremove(&self) -> Result<(), String>;
 }
 
-/// 插件分类路径表（`plugins` 命令用；原版 Locations.plugins.subcategories）。
+/// 插件分类路径表（`plugins` 命令用）。
 /// macOS 18 个分类全表；其他平台暂无可移植的等价目录结构，返回空。
 pub trait PluginPaths {
     fn plugin_categories(&self) -> Vec<crate::plugin::PluginCategory>;

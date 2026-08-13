@@ -1,11 +1,10 @@
-//! 字符串归一化工具 —— 移植自原版 `String.pearFormat()` 与 `strippingTrailingDigits()`
-//! (old/Pearcleaner/Logic/Utilities.swift:702-722, AppPathsFetch.swift:13-24)
+//! 字符串归一化工具 —— pearFormat / strippingTrailingDigits 语义的 Rust 实现
 
 use std::sync::LazyLock;
 
 use regex::Regex;
 
-/// 原版 pearFormat()：仅保留 Unicode 字母数字 → 转小写；结果为空时返回原串
+/// pearFormat()：仅保留 Unicode 字母数字 → 转小写；结果为空时返回原串
 /// （避免空字符串导致误匹配）
 pub fn pear_format(s: &str) -> String {
     let filtered: String = s.chars().filter(|c| c.is_alphanumeric()).collect();

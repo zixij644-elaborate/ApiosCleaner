@@ -1,5 +1,5 @@
-//! 相关文件搜索 —— 忠实移植原版 `AppPathFinder`（old/Pearcleaner/Logic/AppPathsFetch.swift）
-//! 覆盖：初始路径处理、容器查找、目录遍历（深度规则 + 供应商目录规则 + skipDeepSearch）、
+//! 相关文件搜索 —— 枚举应用的全部相关文件
+//! 覆盖：初始路径处理、容器查找、目录遍历（深度规则 + 供应商目录规则 + 跳过深搜）、
 //! 归一化名称匹配、outliers、最终集合整理
 
 use std::collections::HashSet;
@@ -59,7 +59,7 @@ impl<'a> AppPathFinder<'a> {
         finder
     }
 
-    /// 初始路径处理（AppPathsFetch.swift:135-140）：插入应用自身（Wrapper 应用上跳两级）
+    /// 初始路径处理：插入应用自身（Wrapper 应用上跳两级）
     ///
     /// 原版对整个路径做 `contains("Wrapper")` 子串匹配 —— 任意祖先目录名含 "Wrapper"
     /// （如 /Users/wrapperx/Applications/Foo.app）都会误上跳两级到目录本身，
@@ -91,9 +91,9 @@ impl<'a> AppPathFinder<'a> {
         }
     }
 
-    /// 容器查找（AppPathsFetch.swift:143-183）。
-    /// 原版 group container 用 FileManager.containerURL(forSecurityApplicationGroupIdentifier:)
-    /// （ObjC API，以目标 app 的 bundle ID 调用，绝大多数返回 nil）—— PoC 先跳过，只做 UUID 容器扫描。
+    /// 容器查找 —— UUID 形态的 group 容器扫描。
+    /// 设计取舍：按 bundle id 查 group container 的 ObjC API 绝大多数返回 nil，不引入；
+    /// 只扫 /Containers 下的 UUID 目录（get_app_containers）。
     fn get_all_containers(&self) -> Vec<PathBuf> {
         let home = crate::platform::adapter().home();
         app_info::get_app_containers(&home, &self.app.bundle_identifier)
@@ -105,7 +105,7 @@ impl<'a> AppPathFinder<'a> {
         location == format!("{home}/Library") || location == "/Library"
     }
 
-    /// 单目录处理（AppPathsFetch.swift:190-259）
+    /// 单目录处理
     fn process_location(
         &mut self,
         location: &Path,
@@ -123,7 +123,7 @@ impl<'a> AppPathFinder<'a> {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
 
-            // 归一化名称（AppPathsFetch.swift:196-204）：
+            // 归一化名称：
             // 目录 → 永不剥扩展名（URL.hasDirectoryPath 语义，含符号链接目标）
             // 文件带扩展名 → 去掉最后一段扩展名再 pearFormat；无扩展名 → 整体 pearFormat
             let normalized_item_name = if !path.is_dir() && path.extension().is_some() {
@@ -198,7 +198,7 @@ impl<'a> AppPathFinder<'a> {
         }
     }
 
-    /// 收集所有位置（CLI 同步版，AppPathsFetch.swift:279-286）
+    /// 收集所有位置（CLI 同步版）
     fn collect_locations_cli(&mut self) {
         for location in &self.locations.apps_paths {
             let is_lib_root = Self::is_library_directory(location);
@@ -207,7 +207,7 @@ impl<'a> AppPathFinder<'a> {
         }
     }
 
-    /// outliers（AppPathsFetch.swift:734-756）：条件的 includeForce/excludeForce
+    /// outliers：条件的 includeForce/excludeForce
     fn handle_outliers(&self, include: bool) -> Vec<PathBuf> {
         let mut outliers = Vec::new();
         let bundle_identifier = pear_format(&self.app.bundle_identifier);
@@ -224,7 +224,7 @@ impl<'a> AppPathFinder<'a> {
         outliers
     }
 
-    /// 最终集合整理（CLI 版，AppPathsFetch.swift:690-731）
+    /// 最终集合整理（CLI 版）
     fn finalize_collection_cli(&self) -> Vec<PathBuf> {
         let outliers = self.handle_outliers(true);
         let outliers_ex = self.handle_outliers(false);
@@ -233,7 +233,7 @@ impl<'a> AppPathFinder<'a> {
         temp.extend(self.containers.iter().cloned());
         temp.extend(outliers);
 
-        // Spotlight 补充（AppPathsFetch.swift:700-704）：只加手动扫描集合外的索引命中
+        // Spotlight 补充：只加手动扫描集合外的索引命中
         let spotlight = crate::platform::adapter().spotlight_supplemental_paths(
             &self.app.app_name,
             &self.app.bundle_identifier,
@@ -248,7 +248,7 @@ impl<'a> AppPathFinder<'a> {
         let exclude_paths: HashSet<&Path> = outliers_ex.iter().map(|p| p.as_path()).collect();
         temp.retain(|url| !exclude_paths.contains(url.as_path()));
 
-        // 排序 + 子路径过滤（AppPathsFetch.swift:717-726）。
+        // 排序 + 子路径过滤。
         // 原版 CLI 简化只与前一元素比较 → A 是 C 祖先、B 排中间时 C 逃逸；
         // 且相同路径（containers/spotlight/outliers 交叠）不重复去重。
         // 改为与所有已保留元素比较（规模几十到几百，O(n²) 可接受）。
@@ -265,7 +265,7 @@ impl<'a> AppPathFinder<'a> {
             }
         }
 
-        // 唯一结果是回收站内文件 → 清空（AppPathsFetch.swift:727-729）。
+        // 唯一结果是回收站内文件 → 清空。
         // 组件级 .Trash 判断（见 is_in_trash —— 子串匹配会误伤普通目录名）
         if filtered.len() == 1 && is_in_trash(&filtered[0].to_string_lossy()) {
             filtered.clear();
@@ -274,7 +274,7 @@ impl<'a> AppPathFinder<'a> {
         filtered
     }
 
-    /// 主入口（对应 findPathsCLI，AppPathsFetch.swift:842-853）
+    /// 主入口（对应 findPathsCLI）
     pub fn find_paths_cli(&mut self) -> Vec<PathBuf> {
         if self.app.web_app {
             self.finalize_collection_cli()

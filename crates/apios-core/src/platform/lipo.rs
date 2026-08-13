@@ -1,13 +1,12 @@
 //! Lipo 瘦身核心 —— fat（universal）Mach-O 二进制瘦身为当前架构单切片
 //!
-//! 原版 Pearcleaner Lipo.swift（475 行）的忠实移植，但按重写准则修了原版缺陷：
-//! 1. 原版 `#if arch(arm64)` 编译期硬编码目标架构 → 运行时 `cfg!(target_arch)`
-//! 2. 原版只匹配 cputype、忽略 cpusubtype → 同 cputype 取最高 subtype
-//!    （arm64e=2 优先于 arm64=0，x86_64h=8 优先于 x86_64=0）
-//! 3. 原版不支持 fat64（magic 0xcafebabf，offset/size 为 u64）→ 两种格式都解析
-//! 4. 原版全文件读入内存再 subdata → 只 seek 读目标切片字节
-//! 5. 原版直接覆盖写回（中断即损坏）→ 同目录临时文件 + 原子 rename（保留权限位）
-//! 6. 原版无任何边界校验 → nfat_arch 上限 / 切片越界 / 表截断统一校验
+//! 设计要点：
+//! 1. 运行时 `cfg!(target_arch)` 选目标架构，不做编译期硬编码
+//! 2. 同 cputype 取最高 cpusubtype（arm64e=2 优先于 arm64=0，x86_64h=8 优先于 x86_64=0）
+//! 3. 同时支持 fat 与 fat64（magic 0xcafebabf，offset/size 为 u64）
+//! 4. 只 seek 读目标切片字节，不整文件读入内存（fat 文件可达几百 MB）
+//! 5. 同目录临时文件 + 原子 rename（保留权限位），避免覆盖写回中断即损坏
+//! 6. nfat_arch 上限 / 切片越界 / 表截断统一校验
 //!
 //! 模块归属平台层（`#[cfg(target_os = "macos")]` 门控）：universal（fat）二进制是
 //! Darwin 平台独有的格式，其他平台无此结构，非 macOS 构建不编译本模块。
@@ -207,7 +206,7 @@ pub fn select_runnable_slice(slices: &[FatSlice], cputype: u32) -> Option<&FatSl
         .max_by_key(|s| s.cpusubtype)
 }
 
-/// 当前运行架构的 cputype（运行时选择，替代原版 `#if arch` 编译宏）。
+/// 当前运行架构的 cputype（运行时选择，不用编译期硬编码）。
 /// 不支持的架构返回 0 → select_slice 恒 None（当前平台无切片可保留）。
 pub fn current_cputype() -> u32 {
     if cfg!(target_arch = "aarch64") {
