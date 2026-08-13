@@ -269,14 +269,11 @@ impl ProcessControl for LinuxAdapter {
 /// 的划分一致：缓存归 dev-clean，包本体卸载归 `pkg apt`）。
 fn dev_envs_table() -> Vec<DevEnv> {
     let p = |s: &str| s.to_string();
-    vec![
+    let mut envs = crate::dev_env::common_dev_envs();
+    envs.extend([
         DevEnv {
             name: "APT Cache".into(),
             paths: vec![p("/var/cache/apt/archives/")],
-        },
-        DevEnv {
-            name: "Cargo".into(),
-            paths: vec![p("~/.cargo/git/"), p("~/.cargo/registry/")],
         },
         DevEnv {
             name: "Conda".into(),
@@ -289,26 +286,6 @@ fn dev_envs_table() -> Vec<DevEnv> {
         DevEnv {
             name: "DNF Cache".into(),
             paths: vec![p("/var/cache/dnf/")],
-        },
-        DevEnv {
-            name: "Go Modules".into(),
-            paths: vec![p("~/go/pkg/mod/")],
-        },
-        DevEnv {
-            name: "Gradle".into(),
-            paths: vec![p("~/.gradle/caches/"), p("~/.gradle/wrapper/")],
-        },
-        DevEnv {
-            name: "Haskell Stack".into(),
-            paths: vec![p("~/.stack/snapshots/")],
-        },
-        DevEnv {
-            name: "Maven".into(),
-            paths: vec![p("~/.m2/repository/")],
-        },
-        DevEnv {
-            name: "Nix".into(),
-            paths: vec![p("~/.cache/nix/")],
         },
         DevEnv {
             name: "Npm".into(),
@@ -331,24 +308,12 @@ fn dev_envs_table() -> Vec<DevEnv> {
             paths: vec![p("~/.pub-cache/"), p("~/.cache/flutter_engine/")],
         },
         DevEnv {
-            name: "Pyenv".into(),
-            paths: vec![p("~/.pyenv/cache/")],
-        },
-        DevEnv {
-            name: "Swift".into(),
-            paths: vec![p("~/.swiftpm/")],
-        },
-        DevEnv {
             name: "Snapd Cache".into(),
             paths: vec![p("/var/lib/snapd/cache/")],
         },
         DevEnv {
             name: "pacman Cache".into(),
             paths: vec![p("/var/cache/pacman/pkg/")],
-        },
-        DevEnv {
-            name: "Uv".into(),
-            paths: vec![p("~/.cache/uv/")],
         },
         DevEnv {
             name: "VS Code".into(),
@@ -360,14 +325,11 @@ fn dev_envs_table() -> Vec<DevEnv> {
             ],
         },
         DevEnv {
-            name: "Yarn".into(),
-            paths: vec![p("~/.cache/yarn/"), p("~/.yarn-cache/")],
-        },
-        DevEnv {
             name: "Zed".into(),
             paths: vec![p("~/.cache/zed/"), p("~/.local/share/zed/node/cache/")],
         },
-    ]
+    ]);
+    envs
 }
 
 impl DevEnvPaths for LinuxAdapter {

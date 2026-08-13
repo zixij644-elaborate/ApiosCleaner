@@ -463,17 +463,14 @@ impl ProcessControl for MacOsAdapter {
 /// 移除的环境：Conda（无安全缓存条目）、Ruby Gems（无独立缓存目录）。
 fn dev_envs_table() -> Vec<DevEnv> {
     let p = |s: &str| s.to_string();
-    vec![
+    let mut envs = crate::dev_env::common_dev_envs();
+    envs.extend([
         DevEnv {
             name: "Android Studio".into(),
             paths: vec![
                 p("~/Library/Logs/AndroidStudio/"),
                 p("~/Library/Caches/Google/AndroidStudio*/"),
             ],
-        },
-        DevEnv {
-            name: "Cargo".into(),
-            paths: vec![p("~/.cargo/git/"), p("~/.cargo/registry/")],
         },
         DevEnv {
             name: "Carthage".into(),
@@ -508,15 +505,6 @@ fn dev_envs_table() -> Vec<DevEnv> {
             paths: vec![p("~/Library/Caches/deno")],
         },
         DevEnv {
-            name: "Go Modules".into(),
-            paths: vec![p("~/go/pkg/mod/")],
-        },
-        DevEnv {
-            name: "Gradle".into(),
-            paths: vec![p("~/.gradle/caches/"), p("~/.gradle/wrapper/")],
-        },
-        // brew 缓存/日志（可再生，原版 runCleanup 缓存部分；卸载包本体归 `pkg brew`）
-        DevEnv {
             name: "Homebrew".into(),
             paths: vec![
                 p("~/Library/Caches/Homebrew/"),
@@ -524,23 +512,11 @@ fn dev_envs_table() -> Vec<DevEnv> {
             ],
         },
         DevEnv {
-            name: "Haskell Stack".into(),
-            paths: vec![p("~/.stack/snapshots/")],
-        },
-        DevEnv {
             name: "IntelliJ IDEA".into(),
             paths: vec![
                 p("~/Library/Caches/JetBrains/"),
                 p("~/Library/Logs/JetBrains/"),
             ],
-        },
-        DevEnv {
-            name: "Maven".into(),
-            paths: vec![p("~/.m2/repository/")],
-        },
-        DevEnv {
-            name: "Nix".into(),
-            paths: vec![p("~/.cache/nix/")],
         },
         DevEnv {
             name: "Npm".into(),
@@ -561,18 +537,6 @@ fn dev_envs_table() -> Vec<DevEnv> {
         DevEnv {
             name: "Pub".into(),
             paths: vec![p("~/.pub-cache/"), p("~/Library/Caches/flutter_engine/")],
-        },
-        DevEnv {
-            name: "Pyenv".into(),
-            paths: vec![p("~/.pyenv/cache/")],
-        },
-        DevEnv {
-            name: "Swift".into(),
-            paths: vec![p("~/.swiftpm/")],
-        },
-        DevEnv {
-            name: "Uv".into(),
-            paths: vec![p("~/.cache/uv/")],
         },
         DevEnv {
             name: "VS Code".into(),
@@ -602,17 +566,14 @@ fn dev_envs_table() -> Vec<DevEnv> {
             ],
         },
         DevEnv {
-            name: "Yarn".into(),
-            paths: vec![p("~/.cache/yarn/"), p("~/.yarn-cache/")],
-        },
-        DevEnv {
             name: "Zed".into(),
             paths: vec![
                 p("~/Library/Caches/Zed/"),
                 p("~/Library/Application Support/Zed/node/cache/"),
             ],
         },
-    ]
+    ]);
+    envs
 }
 
 impl DevEnvPaths for MacOsAdapter {

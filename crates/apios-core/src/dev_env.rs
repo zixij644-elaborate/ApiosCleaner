@@ -26,6 +26,56 @@ pub struct DevEnv {
 /// 环境 + 各存在路径的大小（字节）
 pub type EnvSize = (DevEnv, Vec<(PathBuf, u64)>);
 
+/// 跨平台路径一致的通用开发环境（macOS/Linux 路径相同，单份定义）。
+/// 平台适配层的表 = 本函数 + 平台专属/路径差异条目（如 macOS 的
+/// Homebrew/Xcode/~/Library 布局、Linux 的包管理器缓存）。路径收紧原则
+/// 同平台表：只列可再生缓存，不列工具本体/配置/用户数据。
+pub fn common_dev_envs() -> Vec<DevEnv> {
+    let p = |s: &str| s.to_string();
+    vec![
+        DevEnv {
+            name: "Cargo".into(),
+            paths: vec![p("~/.cargo/git/"), p("~/.cargo/registry/")],
+        },
+        DevEnv {
+            name: "Go Modules".into(),
+            paths: vec![p("~/go/pkg/mod/")],
+        },
+        DevEnv {
+            name: "Gradle".into(),
+            paths: vec![p("~/.gradle/caches/"), p("~/.gradle/wrapper/")],
+        },
+        DevEnv {
+            name: "Haskell Stack".into(),
+            paths: vec![p("~/.stack/snapshots/")],
+        },
+        DevEnv {
+            name: "Maven".into(),
+            paths: vec![p("~/.m2/repository/")],
+        },
+        DevEnv {
+            name: "Nix".into(),
+            paths: vec![p("~/.cache/nix/")],
+        },
+        DevEnv {
+            name: "Pyenv".into(),
+            paths: vec![p("~/.pyenv/cache/")],
+        },
+        DevEnv {
+            name: "Swift".into(),
+            paths: vec![p("~/.swiftpm/")],
+        },
+        DevEnv {
+            name: "Uv".into(),
+            paths: vec![p("~/.cache/uv/")],
+        },
+        DevEnv {
+            name: "Yarn".into(),
+            paths: vec![p("~/.cache/yarn/"), p("~/.yarn-cache/")],
+        },
+    ]
+}
+
 /// 展开 `~`（首段为 `~` 或 `~/` 时替换为 home 路径）
 pub fn expand_home(pattern: &str, home: &str) -> String {
     if pattern == "~" {

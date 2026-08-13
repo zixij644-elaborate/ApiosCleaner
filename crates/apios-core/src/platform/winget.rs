@@ -204,7 +204,8 @@ mod tests {
         let out = cmd_util::CommandOutput {
             status: std::process::ExitStatus::default(),
             stdout: String::new(),
-            stderr: "No package found matching input criteria. Use --help for more details.\n".to_string(),
+            stderr: "No package found matching input criteria. Use --help for more details.\n"
+                .to_string(),
         };
         let msg = winget_error(&out);
         assert!(msg.starts_with("winget: No package found"), "msg: {msg}");
