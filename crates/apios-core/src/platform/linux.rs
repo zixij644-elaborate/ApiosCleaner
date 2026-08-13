@@ -504,9 +504,10 @@ mod tests {
     fn test_xdg_trash_conflict_appends_suffix() {
         let tmp = tempfile::TempDir::new().unwrap();
         let (adapter, trash) = adapter_with_trash(tmp.path());
+        // 两个**不同路径**但同名文件 → 第二个加 .1 后缀
         let f1 = tmp.path().join("same.txt");
-        let f2 = tmp.path().join("same.txt");
-        // 两个不同路径但同名文件 → 第二个加 .1 后缀
+        let f2 = tmp.path().join("sub").join("same.txt");
+        std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
         std::fs::write(&f1, b"a").unwrap();
         std::fs::write(&f2, b"b").unwrap();
         let r1 = adapter.move_to_trash(std::slice::from_ref(&f1), None);
@@ -533,17 +534,22 @@ mod tests {
     fn test_xdg_trash_blocked_path_rejected() {
         let tmp = tempfile::TempDir::new().unwrap();
         let (adapter, _trash) = adapter_with_trash(tmp.path());
-        // critical 路径（/etc/…）被 validate_path 拦截
-        let result = adapter.move_to_trash(&[PathBuf::from("/etc/hosts")], None);
-        assert!(!result.blocked.is_empty());
-        assert!(result.moved.is_empty());
-        assert!(result.failed.is_empty());
+        // validate_path 只拦 critical **根**（子路径如 /etc/hosts 是合法删除
+        // 目标 —— 搜索范围本身不会产出系统文件）—— 测根目录被拦截
+        for root in ["/etc", "/usr", "/var"] {
+            let result = adapter.move_to_trash(&[PathBuf::from(root)], None);
+            assert!(!result.blocked.is_empty(), "{root} 应被 critical 表拦截");
+            assert!(result.moved.is_empty());
+            assert!(result.failed.is_empty());
+        }
     }
 
     #[test]
     fn test_desktop_discovery_basic() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let apps_dir = tmp.path().join("applications");
+        // 测试文件必须放在 apps_paths() 实际扫描的目录（{home}/.local/share/applications）
+        let home = tmp.path();
+        let apps_dir = home.join(".local/share/applications");
         std::fs::create_dir_all(&apps_dir).unwrap();
         std::fs::write(
             apps_dir.join("firefox.desktop"),
@@ -569,13 +575,17 @@ mod tests {
             cache_dir: String::new(),
             temp_dir: String::new(),
         };
+        // 系统目录（/usr/share/applications 等）的桌面应用也会被发现 —— 按路径
+        // 断言测试文件本身在结果中；NoDisplay/无效项不得混入
+        let firefox_path = apps_dir.join("firefox.desktop");
         let apps = adapter.discover_installed_apps();
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].app_name, "Firefox");
-        assert_eq!(
-            apps[0].path.file_name().unwrap().to_string_lossy(),
-            "firefox.desktop"
+        assert!(
+            apps.iter().any(|a| a.path == firefox_path),
+            "测试 firefox.desktop 应被发现"
         );
-        assert!(apps[0].bundle_identifier.is_empty());
+        let firefox = apps.iter().find(|a| a.path == firefox_path).unwrap();
+        assert_eq!(firefox.app_name, "Firefox");
+        assert!(firefox.bundle_identifier.is_empty());
+        assert!(!apps.iter().any(|a| a.app_name == "Hidden"));
     }
 }
