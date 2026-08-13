@@ -154,6 +154,11 @@ apios uninstall -y Firefox          # no confirmation (scripting)"
         /// folders), or "." for the current directory.
         /// Windows: registry DisplayName, installer path, or .lnk path.
         app: String,
+        /// Skip paths that match — exact path, or everything under this directory.
+        /// Repeatable; useful when discovery pulls in unrelated same-name data
+        /// (e.g. a source checkout next to the app's own data).
+        #[arg(long, value_name = "PATH", action = clap::ArgAction::Append)]
+        except: Vec<String>,
     },
     /// List orphaned files left behind by uninstalled apps (read-only)
     #[command(
@@ -175,7 +180,13 @@ critical system paths are protected.\n\n\
 With -y, everything is deleted without prompting (scripting). Without an interactive \
 terminal and without -y, the command refuses to run."
     )]
-    CleanOrphan,
+    CleanOrphan {
+        /// Skip orphan paths that match — exact path, or everything under this
+        /// directory. Repeatable; applies before interactive selection, so skipped
+        /// entries never appear in the numbered list.
+        #[arg(long, value_name = "PATH", action = clap::ArgAction::Append)]
+        except: Vec<String>,
+    },
     /// List dev environment caches (read-only); with <env>, clean it
     #[command(
         long_about = "Inspect and clean dev-environment caches.\n\n\
@@ -368,9 +379,12 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::List { ref app } => cmd_list(&cli, app),
-        Command::Uninstall { ref app } => cmd_uninstall(&cli, app),
+        Command::Uninstall {
+            ref app,
+            ref except,
+        } => cmd_uninstall(&cli, app, except),
         Command::Orphan => cmd_orphan(&cli),
-        Command::CleanOrphan => cmd_clean_orphan(&cli),
+        Command::CleanOrphan { ref except } => cmd_clean_orphan(&cli, except),
         Command::DevClean { ref env } => cmd_dev_clean(&cli, env.as_deref()),
         Command::Pkg { ref pm, ref action } => cmd_pkg(&cli, pm, action),
         Command::Plugins {
@@ -654,6 +668,26 @@ fn report_blocked(blocked: &[PathBuf]) {
 
 // ---------- 命令实现 ----------
 
+/// `--except` 过滤：剔除等于或位于指定路径之下的条目（except 是目录时整目录
+/// 排除）。支持 `~` 展开；词法比较（不 resolve 符号链接，避免删除目标语义漂移）。
+fn filter_except(paths: Vec<PathBuf>, except: &[String]) -> (Vec<PathBuf>, usize) {
+    if except.is_empty() {
+        return (paths, 0);
+    }
+    let home = apios_core::platform::adapter().home();
+    let excluded: Vec<PathBuf> = except
+        .iter()
+        .map(|e| PathBuf::from(expand_home(e, &home)))
+        .collect();
+    let total = paths.len();
+    let kept: Vec<PathBuf> = paths
+        .into_iter()
+        .filter(|p| !excluded.iter().any(|e| p == e || p.starts_with(e)))
+        .collect();
+    let skipped = total - kept.len();
+    (kept, skipped)
+}
+
 fn find_app_paths(app: &AppInfo) -> Vec<PathBuf> {
     let locations = Locations::new();
     let mut finder = AppPathFinder::new(app, &locations, Sensitivity::Strict);
@@ -672,10 +706,14 @@ fn cmd_list(cli: &Cli, arg: &str) {
     println!("\nFound {} application files.\n", found.len());
 }
 
-fn cmd_uninstall(cli: &Cli, arg: &str) {
+fn cmd_uninstall(cli: &Cli, arg: &str, except: &[String]) {
     let path = resolve_app_or_exit(arg);
     let app = get_app_info_or_exit(&path);
     let found = find_app_paths(&app);
+    let (found, skipped) = filter_except(found, except);
+    if skipped > 0 {
+        println!("Skipped {skipped} file(s) (--except).");
+    }
 
     check_protected(&found, &format!("apios uninstall {}", arg));
 
@@ -1479,8 +1517,12 @@ fn select_orphans(cli: &Cli, found: &[PathBuf]) -> Vec<PathBuf> {
     }
 }
 
-fn cmd_clean_orphan(cli: &Cli) {
+fn cmd_clean_orphan(cli: &Cli, except: &[String]) {
     let found = find_orphans();
+    let (found, skipped) = filter_except(found, except);
+    if skipped > 0 {
+        println!("Skipped {skipped} orphan(s) (--except).");
+    }
 
     if found.is_empty() {
         println!("No orphaned files found.");
@@ -1614,5 +1656,46 @@ mod tests {
         std::fs::write(tmp.path().join("sub/b"), b"x").unwrap();
         let contents = dir_contents(tmp.path());
         assert_eq!(contents.len(), 2); // 仅顶层条目，不递归
+    }
+
+    #[test]
+    fn test_filter_except_no_except_unchanged() {
+        let paths = vec![PathBuf::from("/a/b"), PathBuf::from("/c")];
+        let (kept, skipped) = filter_except(paths.clone(), &[]);
+        assert_eq!(kept, paths);
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
+    fn test_filter_except_exact_path() {
+        let paths = vec![PathBuf::from("/Apps/Foo.app"), PathBuf::from("/data/Foo")];
+        let (kept, skipped) = filter_except(paths, &["/data/Foo".to_string()]);
+        assert_eq!(kept, vec![PathBuf::from("/Apps/Foo.app")]);
+        assert_eq!(skipped, 1);
+    }
+
+    #[test]
+    fn test_filter_except_directory_prefix() {
+        // except 是目录 → 整目录及其子路径全部剔除
+        let paths = vec![
+            PathBuf::from("/data/Foo/sub/file.txt"),
+            PathBuf::from("/data/Foo"),
+            PathBuf::from("/data/FooBar"), // 前缀但非子路径 → 保留
+        ];
+        let (kept, skipped) = filter_except(paths, &["/data/Foo".to_string()]);
+        assert_eq!(kept, vec![PathBuf::from("/data/FooBar")]);
+        assert_eq!(skipped, 2);
+    }
+
+    #[test]
+    fn test_filter_except_multiple() {
+        let paths = vec![
+            PathBuf::from("/a"),
+            PathBuf::from("/b"),
+            PathBuf::from("/c"),
+        ];
+        let (kept, skipped) = filter_except(paths, &["/a".to_string(), "/c".to_string()]);
+        assert_eq!(kept, vec![PathBuf::from("/b")]);
+        assert_eq!(skipped, 2);
     }
 }
