@@ -13,10 +13,10 @@
 //!   残留走 `apios uninstall`/orphan（对齐 cleaner 语义，不跑卸载器）
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::windows::WindowsAdapter;
 use super::{PackageManager, PackageManagers};
+use crate::cmd_util;
 use crate::pkg::{PkgInfo, PkgKind};
 
 /// 自动化环境必须的全局旗标（首次运行接受源协议 + 禁用交互，防卡死）
@@ -52,26 +52,14 @@ impl Winget {
         })
     }
 
-    /// 严格执行：失败（非零退出）→ Err（stderr 尾部）
-    fn run(&self, args: &[&str]) -> Result<std::process::Output, String> {
+    /// 严格执行：失败（非零退出）→ Err（stderr 尾部 + 首行提示）
+    fn run(&self, args: &[&str]) -> Result<cmd_util::CommandOutput, String> {
         let winget = self.require_winget()?;
-        let output = Command::new(winget)
-            .args(args)
-            .output()
-            .map_err(|e| format!("failed to run winget: {e}"))?;
-        if output.status.success() {
-            Ok(output)
+        let out = cmd_util::run_capture(winget, args, &[])?;
+        if out.status.success() {
+            Ok(out)
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let tail: Vec<&str> = stderr.lines().rev().take(5).collect();
-            let tail = tail.iter().rev().copied().collect::<Vec<_>>().join("\n");
-            let mut msg = format!("winget {} failed:\n{tail}", args.first().unwrap_or(&""));
-            // winget 的"未找到"与版本类错误走 stderr 首行带 --help 提示，一并带上
-            let head = stderr.lines().take(1).collect::<Vec<_>>().join(" ");
-            if !head.is_empty() && head.len() < 160 {
-                msg = format!("winget: {head}");
-            }
-            Err(msg)
+            Err(winget_error(&out))
         }
     }
 }
@@ -80,6 +68,17 @@ impl Default for Winget {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// winget 错误消息：stderr 尾部（~5 行）；"未找到"与版本类错误走 stderr 首行
+/// 带 --help 提示，一并带上
+fn winget_error(out: &cmd_util::CommandOutput) -> String {
+    let mut msg = cmd_util::stderr_tail(out, Path::new("winget"));
+    let head = out.stderr.lines().take(1).collect::<Vec<_>>().join(" ");
+    if !head.is_empty() && head.len() < 160 {
+        msg = format!("winget: {head}");
+    }
+    msg
 }
 
 /// 解析 `winget list` 输出（默认五列表格：Name / Id / Version / Available / Source）。
@@ -137,7 +136,7 @@ impl PackageManager for Winget {
         let mut args = vec!["list"];
         args.extend(AUTOMATION_FLAGS);
         let output = self.run(&args)?;
-        Ok(parse_winget_list(&String::from_utf8_lossy(&output.stdout)))
+        Ok(parse_winget_list(&output.stdout))
     }
 
     fn dependents(&self, _name: &str, _kind: PkgKind) -> Result<Vec<String>, String> {
@@ -197,6 +196,31 @@ mod tests {
             candidates,
             vec![PathBuf::from(r"C:\Windows\System32\winget.exe")]
         );
+    }
+
+    #[test]
+    fn test_winget_error_head_replaces_message() {
+        // "未找到"类错误：stderr 首行带 --help 提示 → 整条消息替换
+        let out = cmd_util::CommandOutput {
+            status: std::process::ExitStatus::default(),
+            stdout: String::new(),
+            stderr: "No package found matching input criteria. Use --help for more details.\n".to_string(),
+        };
+        let msg = winget_error(&out);
+        assert!(msg.starts_with("winget: No package found"), "msg: {msg}");
+    }
+
+    #[test]
+    fn test_winget_error_tail_for_long_stderr() {
+        // 长 stderr → 尾部 5 行
+        let out = cmd_util::CommandOutput {
+            status: std::process::ExitStatus::default(),
+            stdout: String::new(),
+            stderr: "l1\nl2\nl3\nl4\nl5\nl6\nl7\n".to_string(),
+        };
+        let msg = winget_error(&out);
+        assert!(msg.starts_with("winget failed:\nl3"), "msg: {msg}");
+        assert!(!msg.contains("l1"), "不应含首行");
     }
 
     #[test]
