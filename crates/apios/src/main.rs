@@ -144,10 +144,13 @@ apios list \"7-Zip\""
 caches, preferences, saved state, Application Support, launch agents, …\n\n\
 Asks for confirmation (y/N, default no) unless -y is given. Files are moved to a \
 timestamped archive folder in the Trash (macOS/Linux) or the Recycle Bin (Windows) — \
-nothing is ever permanently deleted.",
+nothing is ever permanently deleted.\n\n\
+--except PATH (repeatable) skips matching paths — exact, or everything under a \
+directory — useful when discovery pulls in unrelated same-name data.",
         after_long_help = "EXAMPLES:\n  \
 apios uninstall Firefox\n  \
-apios uninstall -y Firefox          # no confirmation (scripting)"
+apios uninstall -y Firefox          # no confirmation (scripting)\n  \
+apios uninstall Firefox --except ~/Projects/foo    # keep that directory"
     )]
     Uninstall {
         /// Full path to the app, an app name (looked up in the default application
@@ -175,8 +178,12 @@ orphans."
 printed with an index; type numbers to select (e.g. \"1,3-5\"), 'a' for all, or Enter \
 to cancel. Only the selected files are moved — useful when some candidates are \
 deliberate leftovers (e.g. a game's save folder).\n\n\
+Protected entries (root-owned, e.g. /Library/...) are marked [sudo] and can be \
+skipped — no sudo is needed for the rest. Run `apios orphan` first for the same \
+numbered list.\n\n\
 Same safety model as uninstall: files move to the Trash/Recycle Bin, never permanent; \
 critical system paths are protected.\n\n\
+--except PATH (repeatable) drops matching entries before the list is shown.\n\n\
 With -y, everything is deleted without prompting (scripting). Without an interactive \
 terminal and without -y, the command refuses to run."
     )]
@@ -1435,8 +1442,11 @@ fn cmd_orphan(cli: &Cli) {
     let _ = cli;
     let found = find_orphans();
 
-    for p in &found {
-        println!("{}", p.display());
+    // 与 clean-orphan 交互列表完全一致的编号格式（含 [sudo] 标注），
+    // 用户对照选择时编号一一对应，无需自己数
+    for (i, p) in found.iter().enumerate() {
+        let mark = if is_writable(p) { "" } else { " [sudo]" };
+        println!("  {:>3}. {}{}", i + 1, p.display(), mark);
     }
     println!("\nFound {} orphaned files.\n", found.len());
 }

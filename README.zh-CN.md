@@ -90,13 +90,16 @@ apios list SomeApp
 
 # 卸载应用：应用本体 + 全部关联文件 → 回收站
 apios uninstall SomeApp
+apios uninstall SomeApp --except ~/Projects/foo   # 保留该路径
 
-# 列出已卸载应用留下的孤儿文件（只读）
+# 列出已卸载应用留下的孤儿文件（只读；编号与 clean-orphan 完全一致，
+# 受保护条目标注 [sudo]）
 apios orphan
 
 # 删除孤儿文件——候选按编号列出，输入要删的编号（如 "1,3-5"）、
 # 'a' 全删或直接回车取消。只移动选中的文件，故意的残留
-# （游戏存档目录等）可以保留。-y 跳过选择直接全删（脚本用）。
+# （游戏存档目录等）可以保留。受保护条目（root 所有）标注 [sudo]，
+# 可跳过，无需为清理单个孤儿整体 sudo。-y 跳过选择直接全删（脚本用）。
 apios clean-orphan
 
 # 查看开发环境缓存大小（只读）

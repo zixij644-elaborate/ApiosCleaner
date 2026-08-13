@@ -98,14 +98,17 @@ apios list SomeApp
 
 # Uninstall an app: the bundle and ALL related files, moved to Trash
 apios uninstall SomeApp
+apios uninstall SomeApp --except ~/Projects/foo   # keep that path
 
-# List orphaned files left behind by uninstalled apps (read-only)
+# List orphaned files left behind by uninstalled apps (read-only;
+# numbered identically to clean-orphan, protected entries marked [sudo])
 apios orphan
 
 # Delete orphaned files — candidates are listed with numbers; type the ones to
 # delete (e.g. "1,3-5"), 'a' for all, or Enter to cancel. Only the selected
 # files are moved, so deliberate leftovers (a game's save folder, …) can be kept.
-# -y deletes everything without prompting (scripting).
+# Protected entries (root-owned) are marked [sudo] and can be skipped — no sudo
+# needed for the rest. -y deletes everything without prompting (scripting).
 apios clean-orphan
 
 # List dev environment cache sizes (read-only)

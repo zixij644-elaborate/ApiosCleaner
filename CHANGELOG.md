@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - shared dev-env table — 10 environments with identical paths on macOS
     and Linux (Cargo, Go Modules, Gradle, …) are defined once in core;
     the macOS 25 / Linux 22 environment sets are unchanged.
+- **`--except` path skipping** — `uninstall` and `clean-orphan` accept
+  repeatable `--except PATH` (exact match, or everything under a directory,
+  `~` expanded) so same-name data that does not belong to the app (a source
+  checkout, a shared folder) is kept. Skipped count is reported; verified on
+  a real uninstall that pulled in a same-name reference repo.
 - **`clean-orphan` interactive selection** — candidates are listed with
   numbers; type `1,3-5` (single numbers and ranges), `a`/`all`, or Enter to
   cancel. Only the selected files are moved, so deliberate leftovers (a
@@ -57,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`clean-orphan` no longer demands sudo for the whole list** —
+  `check_protected` bailed the entire command when any orphan was root-owned
+  (e.g. `/Library/Application Support/PDInstaller`), so the numbered
+  interactive list never appeared. Protected entries are now marked
+  `[sudo]` in the list and can be skipped; selecting one reports the failed
+  move with a sudo hint. `uninstall` keeps its whole-list sudo check (it
+  deletes everything).
+- **`orphan` output unified** — the read-only list now uses the same
+  numbered format (with `[sudo]` markers) as `clean-orphan`, so the
+  numbers correspond 1:1 when choosing what to delete.
 - **Orphan-scan trash exclusion** — the `skip_reverse` name substring
   ("trash") is replaced by component-level `conditions::is_in_trash`
   (`.Trash` / `Trash` / `.Trash-` prefix). Previously any directory whose
