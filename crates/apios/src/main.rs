@@ -101,7 +101,7 @@ Platform notes:\n  \
 • macOS — full feature set, incl. Homebrew and lipo\n  \
 • Windows — registry + Start Menu discovery, Recycle Bin via the system API, \
 dev caches, winget\n  \
-• Linux — compiles with default XDG behavior",
+• Linux — .desktop discovery, XDG trash, apt package manager",
     after_long_help = "EXAMPLES:\n  \
 apios list Firefox                    List everything Firefox leaves behind\n  \
 apios uninstall Firefox               Move Firefox + all its files to the Trash\n  \
