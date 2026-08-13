@@ -24,7 +24,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::exit;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 use apios_core::app_info::get_app_info;
 use apios_core::dev_env::{dedup_nested, dir_size, env_sizes, expand_globs, expand_home, find_env};
 use apios_core::locations::Locations;
@@ -38,7 +38,7 @@ use apios_core::platform::{
 };
 use apios_core::plugin::{group_by_category, scan_plugins, PluginCategory};
 use apios_core::scan::default_app_folders;
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "macos"))]
 use apios_core::scan::find_app_by_path;
 #[cfg(target_os = "macos")]
 use apios_core::scan::get_sorted_apps;
@@ -387,10 +387,11 @@ fn main() {
 
 // ---------- <app> 参数解析 ----------
 
-/// Windows 发现结果缓存：同一条命令里 find_app_by_name 与 get_app_info_or_exit
-/// 各触发一次全量枚举（注册表三视图 + 开始菜单 walk，~140 条目），结果确定性
-/// 一致 —— 进程内缓存避免翻倍开销。CLI 是一次性进程，无陈旧问题。
-#[cfg(windows)]
+/// 发现结果缓存：同一条命令里 find_app_by_name 与 get_app_info_or_exit
+/// 各触发一次全量枚举（Windows 注册表三视图 + 开始菜单 walk；Linux desktop
+/// 扫描），结果确定性一致 —— 进程内缓存避免翻倍开销。CLI 是一次性进程，
+/// 无陈旧问题。macOS 不调用（.app 目录查找不走发现）。
+#[cfg(not(target_os = "macos"))]
 fn discover_apps_cached() -> Vec<AppInfo> {
     use std::sync::LazyLock;
     static CACHE: LazyLock<std::sync::Mutex<Option<Vec<AppInfo>>>> =
@@ -417,36 +418,11 @@ fn arg_is_path(arg: &str) -> bool {
 }
 
 /// 按名称查找应用 → 路径。
-/// macOS/Linux：在默认应用目录中查找 <name>.app（先精确匹配，再大小写不敏感）；
-/// Windows：无 .app 概念 —— 从发现结果（注册表 DisplayName / 开始菜单名）匹配。
+/// macOS：在默认应用目录中查找 <name>.app（先精确匹配，再大小写不敏感）；
+/// Windows/Linux：无 .app 概念 —— 从发现结果（Windows 注册表 DisplayName /
+/// 开始菜单名；Linux .desktop Name）匹配。
 fn find_app_by_name(name: &str, folders: &[String]) -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        let _ = folders;
-        let apps = discover_apps_cached();
-        let lower = name.to_lowercase();
-        // 精确匹配优先；否则前缀匹配（注册表 DisplayName 常带版本号，
-        // 如 "7-Zip 26.01 (x64)" → 输入 "7-Zip" 命中）。多命中排序：
-        // 注册表主条目（path 非 .lnk）优先于开始菜单 .lnk（Help/卸载等杂项），
-        // 同源按名称最短取最接近的
-        apps.iter()
-            .find(|a| a.app_name.to_lowercase() == lower)
-            .or_else(|| {
-                let mut hits: Vec<&AppInfo> = apps
-                    .iter()
-                    .filter(|a| a.app_name.to_lowercase().starts_with(&lower))
-                    .collect();
-                if hits.is_empty() {
-                    return None;
-                }
-                hits.sort_by_key(|a| {
-                    (a.path.to_string_lossy().ends_with(".lnk"), a.app_name.len())
-                });
-                hits.into_iter().next()
-            })
-            .map(|a| a.path.clone())
-    }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
         let exact = format!("{name}.app");
         for folder in folders {
@@ -468,6 +444,32 @@ fn find_app_by_name(name: &str, folders: &[String]) -> Option<PathBuf> {
             }
         }
         None
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = folders;
+        let apps = discover_apps_cached();
+        let lower = name.to_lowercase();
+        // 精确匹配优先；否则前缀匹配（DisplayName/.desktop Name 常带版本/说明
+        // 后缀，如 "7-Zip 26.01 (x64)" / "Firefox ESR" → 输入 "7-Zip"/"Firefox"）。
+        // 多命中排序：注册表主条目（path 非 .lnk）优先于开始菜单 .lnk（Help/卸载
+        // 等杂项），同源按名称最短取最接近的（Linux 无 .lnk，排序退化为长度）。
+        apps.iter()
+            .find(|a| a.app_name.to_lowercase() == lower)
+            .or_else(|| {
+                let mut hits: Vec<&AppInfo> = apps
+                    .iter()
+                    .filter(|a| a.app_name.to_lowercase().starts_with(&lower))
+                    .collect();
+                if hits.is_empty() {
+                    return None;
+                }
+                hits.sort_by_key(|a| {
+                    (a.path.to_string_lossy().ends_with(".lnk"), a.app_name.len())
+                });
+                hits.into_iter().next()
+            })
+            .map(|a| a.path.clone())
     }
 }
 
@@ -502,7 +504,7 @@ fn resolve_app_or_exit(arg: &str) -> PathBuf {
                 "apios: cannot find \"{arg}\" as a path or an installed app \
                  (searched the registry uninstall entries and the Start Menu)"
             );
-            #[cfg(not(windows))]
+            #[cfg(target_os = "macos")]
             eprintln!(
                 "apios: cannot find \"{arg}\" as a path or an installed app (looked in {})",
                 folders
@@ -510,6 +512,11 @@ fn resolve_app_or_exit(arg: &str) -> PathBuf {
                     .map(|f| f.as_str())
                     .collect::<Vec<_>>()
                     .join(", ")
+            );
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            eprintln!(
+                "apios: cannot find \"{arg}\" as a path or an installed app \
+                 (searched installed desktop applications)"
             );
             exit(1);
         }
@@ -521,49 +528,7 @@ fn resolve_app_or_exit(arg: &str) -> PathBuf {
 /// Windows：无 Info.plist —— 从发现结果（注册表卸载项/开始菜单）按路径匹配；
 /// 未注册的应用（便携版）按目录名构造最小 AppInfo（bundle 空，降级匹配生效）。
 fn get_app_info_or_exit(path: &Path) -> AppInfo {
-    #[cfg(windows)]
-    {
-        let apps = discover_apps_cached();
-        if let Some(app) = find_app_by_path(path, &apps) {
-            return app;
-        }
-        // 未注册应用（便携版）按目录名构造最小 AppInfo。安全门槛：路径必须
-        // 看起来像应用 —— 本身是 .exe，或目录内（顶层）含 .exe。否则任意
-        // 路径（如 `apios uninstall .` 命中 cwd）都会被整目录移入回收站。
-        let looks_like_app = (path.is_file()
-            && path
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("exe")))
-            || (path.is_dir()
-                && std::fs::read_dir(path).is_ok_and(|entries| {
-                    entries.flatten().any(|e| {
-                        let p = e.path();
-                        p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe"))
-                    })
-                }));
-        if !looks_like_app {
-            eprintln!(
-                "apios: {} is not an app (no .exe found); refusing to delete",
-                path.display()
-            );
-            exit(1);
-        }
-        let app_name = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Unknown".to_string());
-        AppInfo {
-            path: path.to_path_buf(),
-            bundle_identifier: String::new(),
-            app_name,
-            entitlements: Vec::new(),
-            team_identifier: None,
-            web_app: false,
-            steam: false,
-            wrapped: false,
-        }
-    }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
     {
         match get_app_info(path) {
             Some(app) => app,
@@ -574,6 +539,61 @@ fn get_app_info_or_exit(path: &Path) -> AppInfo {
                 );
                 exit(1);
             }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let apps = discover_apps_cached();
+        if let Some(app) = find_app_by_path(path, &apps) {
+            return app;
+        }
+        #[cfg(windows)]
+        {
+            // 未注册应用（便携版）按目录名构造最小 AppInfo。安全门槛：路径必须
+            // 看起来像应用 —— 本身是 .exe，或目录内（顶层）含 .exe。否则任意
+            // 路径（如 `apios uninstall .` 命中 cwd）都会被整目录移入回收站。
+            let looks_like_app = (path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("exe")))
+                || (path.is_dir()
+                    && std::fs::read_dir(path).is_ok_and(|entries| {
+                        entries.flatten().any(|e| {
+                            let p = e.path();
+                            p.is_file()
+                                && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("exe"))
+                        })
+                    }));
+            if !looks_like_app {
+                eprintln!(
+                    "apios: {} is not an app (no .exe found); refusing to delete",
+                    path.display()
+                );
+                exit(1);
+            }
+            let app_name = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Unknown".to_string());
+            AppInfo {
+                path: path.to_path_buf(),
+                bundle_identifier: String::new(),
+                app_name,
+                entitlements: Vec::new(),
+                team_identifier: None,
+                web_app: false,
+                steam: false,
+                wrapped: false,
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            // Linux：未注册的 .desktop 条目拒绝操作（无桌面条目 = 无应用身份）
+            eprintln!(
+                "apios: {} is not a known desktop application (no matching .desktop entry); refusing to proceed",
+                path.display()
+            );
+            exit(1);
         }
     }
 }
