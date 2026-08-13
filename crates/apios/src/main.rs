@@ -828,6 +828,7 @@ fn kind_plural(kind: PkgKind) -> &'static str {
     match kind {
         PkgKind::Formula => "Formulae",
         PkgKind::Cask => "Casks",
+        PkgKind::Package => "Packages",
     }
 }
 

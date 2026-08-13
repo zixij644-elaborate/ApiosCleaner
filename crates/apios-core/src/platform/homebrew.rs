@@ -17,10 +17,10 @@
 //!   versions`）→ 错误文本追加提示，不自动强删（用户决策：永不用 --force）
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::macos::MacOsAdapter;
 use super::{PackageManager, PackageManagers};
+use crate::cmd_util;
 use crate::pkg::{self, PkgInfo, PkgKind};
 
 /// 探测候选位置：Apple Silicon /opt/homebrew、Intel /usr/local、PATH
@@ -57,30 +57,22 @@ impl Homebrew {
         })
     }
 
-    /// 严格执行：失败（非零退出）→ Err（stderr 尾部）；成功 → Ok(Output)
-    fn run(&self, args: &[&str]) -> Result<std::process::Output, String> {
+    /// 严格执行：失败（非零退出）→ Err（stderr 尾部 + brew 专属提示）；
+    /// 成功 → Ok(CommandOutput)
+    fn run(&self, args: &[&str]) -> Result<cmd_util::CommandOutput, String> {
         let brew = self.require_brew()?;
-        let output = Command::new(brew)
-            .args(args)
-            // 自动化环境防 brew 自动更新拖慢/改状态
-            .env("HOMEBREW_NO_AUTO_UPDATE", "1")
-            .output()
-            .map_err(|e| format!("failed to run brew: {e}"))?;
-        if output.status.success() {
-            Ok(output)
+        let out = cmd_util::run_capture(brew, args, &[("HOMEBREW_NO_AUTO_UPDATE", "1")])?;
+        if out.status.success() {
+            Ok(out)
         } else {
-            Err(stderr_tail(&output, args))
+            Err(brew_error(brew, &out))
         }
     }
 
     /// 无视退出码执行（cask 的 uses 依赖方场景：brew exit 1 但 stdout 有结果）
-    fn run_ignore_status(&self, args: &[&str]) -> Result<std::process::Output, String> {
+    fn run_ignore_status(&self, args: &[&str]) -> Result<cmd_util::CommandOutput, String> {
         let brew = self.require_brew()?;
-        Command::new(brew)
-            .args(args)
-            .env("HOMEBREW_NO_AUTO_UPDATE", "1")
-            .output()
-            .map_err(|e| format!("failed to run brew: {e}"))
+        cmd_util::run_capture(brew, args, &[("HOMEBREW_NO_AUTO_UPDATE", "1")])
     }
 }
 
@@ -91,14 +83,11 @@ impl Default for Homebrew {
 }
 
 /// stderr 尾部（~5 行）+ 已识别的特殊失败提示（pinned / 多版本）
-fn stderr_tail(output: &std::process::Output, args: &[&str]) -> String {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let tail: Vec<&str> = stderr.lines().rev().take(5).collect();
-    let tail = tail.iter().rev().copied().collect::<Vec<_>>().join("\n");
-    let mut msg = format!("brew {} failed:\n{tail}", args.first().unwrap_or(&""));
-    if stderr.contains("is pinned") {
+fn brew_error(brew: &Path, out: &cmd_util::CommandOutput) -> String {
+    let mut msg = cmd_util::stderr_tail(out, brew);
+    if out.stderr.contains("is pinned") {
         msg.push_str("\nHint: run `brew unpin` first, then retry (or uninstall via `brew uninstall --force`).");
-    } else if stderr.contains("multiple installed versions") {
+    } else if out.stderr.contains("multiple installed versions") {
         msg.push_str("\nHint: run `brew uninstall --force` to remove all installed versions.");
     }
     msg
@@ -111,6 +100,7 @@ fn uninstall_args(name: &str, kind: PkgKind, zap: bool, ignore_deps: bool) -> Ve
         match kind {
             PkgKind::Formula => "--formula",
             PkgKind::Cask => "--cask",
+            PkgKind::Package => unreachable!("brew has no Package kind"),
         }
         .to_string(),
     );
@@ -139,6 +129,7 @@ fn list_args(kind: PkgKind) -> Vec<String> {
         match kind {
             PkgKind::Formula => "--formula",
             PkgKind::Cask => "--cask",
+            PkgKind::Package => unreachable!("brew has no Package kind"),
         }
         .to_string(),
     ]
@@ -157,10 +148,7 @@ impl PackageManager for Homebrew {
                 .collect::<Vec<_>>()
                 .as_slice(),
         )?;
-        Ok(pkg::parse_brew_list_versions(
-            &String::from_utf8_lossy(&output.stdout),
-            kind,
-        ))
+        Ok(pkg::parse_brew_list_versions(&output.stdout, kind))
     }
 
     fn dependents(&self, name: &str, kind: PkgKind) -> Result<Vec<String>, String> {
@@ -172,23 +160,21 @@ impl PackageManager for Homebrew {
         // - 空 stdout + 非零退出：stderr 是 cask 慢路径预期警告（"No available
         //   formula"）→ 视为无依赖方；否则是真实失败 → Err
         let _ = kind;
-        let output = self.run_ignore_status(
+        let brew = self.require_brew()?;
+        let out = self.run_ignore_status(
             args.iter()
                 .map(String::as_str)
                 .collect::<Vec<_>>()
                 .as_slice(),
         )?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let dependents = pkg::parse_brew_uses(&stdout);
-        if output.status.success() || !dependents.is_empty() {
+        let dependents = pkg::parse_brew_uses(&out.stdout);
+        if out.status.success() || !dependents.is_empty() {
             return Ok(dependents);
         }
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("No available formula") {
+        if out.stderr.contains("No available formula") {
             return Ok(dependents);
         }
-        let arg_strs: Vec<&str> = args.iter().map(String::as_str).collect();
-        Err(stderr_tail(&output, &arg_strs))
+        Err(brew_error(brew, &out))
     }
 
     fn uninstall(
@@ -210,9 +196,7 @@ impl PackageManager for Homebrew {
 
     fn autoremove_dry_run(&self) -> Result<Vec<String>, String> {
         let output = self.run(&["autoremove", "-n"])?;
-        Ok(pkg::parse_brew_autoremove(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
+        Ok(pkg::parse_brew_autoremove(&output.stdout))
     }
 
     fn autoremove(&self) -> Result<(), String> {

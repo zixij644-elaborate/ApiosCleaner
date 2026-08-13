@@ -8,7 +8,9 @@
 //! 跨平台清理器：macOS 全功能、Windows 适配器（真机验证）、Linux 默认 XDG。
 
 pub mod app_info;
+pub mod cmd_util;
 pub mod conditions;
+pub mod desktop;
 pub mod dev_env;
 pub mod format;
 pub mod identifiers;

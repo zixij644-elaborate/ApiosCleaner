@@ -9,11 +9,14 @@
 //!
 //! 解析全部基于纯文本（每行一个条目），不引入 serde/JSON —— 项目无 serde 依赖。
 
-/// 包种类（brew 的 formula / cask）
+/// 包种类。brew 区分 formula / cask（源码包/预编译 GUI 应用）；其他包管理器
+/// 无此概念（winget 历史原因全归 Formula；apt/snap 等用通用 `Package`）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PkgKind {
     Formula,
     Cask,
+    /// 通用二进制包（apt/snap 等无 formula/cask 区分的管理器）
+    Package,
 }
 
 impl PkgKind {
@@ -21,6 +24,7 @@ impl PkgKind {
         match self {
             PkgKind::Formula => "formula",
             PkgKind::Cask => "cask",
+            PkgKind::Package => "package",
         }
     }
 }
@@ -93,6 +97,82 @@ pub fn detect_kind(name: &str, formulae: &[String], casks: &[String]) -> Option<
     } else {
         None
     }
+}
+
+/// 解析 `apt list --installed` 输出。行格式（apt 2.x）：
+/// `<name>/<archive>,now <version> <arch> [installed,...]`
+/// （如 `adduser/stable,now 3.137 all [installed]`）；跳过 `Listing...` 头行
+/// 与不含 `/` 的行（apt 某些本地包行无 archive 段时不产出条目）。
+pub fn parse_apt_list(output: &str) -> Vec<PkgInfo> {
+    let mut pkgs: Vec<PkgInfo> = output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (name, rest) = line.split_once('/')?;
+            let mut fields = rest.split_whitespace();
+            // archive 段（"stable,now"）之后第一个字段是版本
+            let _archive = fields.next()?;
+            let version = fields.next()?;
+            if name.is_empty() {
+                return None;
+            }
+            Some(PkgInfo {
+                name: name.to_string(),
+                version: version.to_string(),
+                kind: PkgKind::Package,
+            })
+        })
+        .collect();
+    pkgs.sort_by(|a, b| a.name.cmp(&b.name));
+    pkgs
+}
+
+/// 解析 `apt-get autoremove --dry-run` 输出的 "will be REMOVED" 段。
+/// 段结构：标记行后是**缩进**的包名行（可多词一行），随后非缩进的统计行
+/// （"N upgraded, ... to remove..."）结束段。
+pub fn parse_apt_autoremove(output: &str) -> Vec<String> {
+    let mut pkgs: Vec<String> = Vec::new();
+    let mut in_section = false;
+    for line in output.lines() {
+        if line.contains("will be REMOVED") {
+            in_section = true;
+            continue;
+        }
+        if in_section {
+            if line.starts_with(char::is_whitespace) {
+                pkgs.extend(line.split_whitespace().map(str::to_string));
+            } else if !line.trim().is_empty() {
+                // 非缩进非空行 = 段结束（统计行）
+                break;
+            }
+        }
+    }
+    pkgs.sort_unstable();
+    pkgs.dedup();
+    pkgs
+}
+
+/// 解析 `apt-cache rdepends --installed <name>` 输出：`Reverse Depends:` 段内
+/// 的缩进行（每行一个已安装的被依赖方）。
+pub fn parse_apt_rdepends(output: &str) -> Vec<String> {
+    let mut deps: Vec<String> = Vec::new();
+    let mut in_section = false;
+    for line in output.lines() {
+        if line.contains("Reverse Depends") {
+            in_section = true;
+            continue;
+        }
+        if in_section {
+            let t = line.trim();
+            if t.is_empty() {
+                continue;
+            }
+            deps.push(t.to_string());
+        }
+    }
+    deps.sort_unstable();
+    deps.dedup();
+    deps
 }
 
 #[cfg(test)]
@@ -203,5 +283,74 @@ mod tests {
             detect_kind("dual", &formulae, &casks),
             Some(PkgKind::Formula)
         );
+    }
+
+    // ---- apt 解析 ----
+
+    #[test]
+    fn test_parse_apt_list_basic() {
+        let out = "Listing... Done\nadduser/stable,now 3.137 all [installed]\napt/stable,now 2.7.14 amd64 [installed,automatic]\n";
+        let pkgs = parse_apt_list(out);
+        assert_eq!(pkgs.len(), 2);
+        assert_eq!(pkgs[0].name, "adduser");
+        assert_eq!(pkgs[0].version, "3.137");
+        assert_eq!(pkgs[0].kind, PkgKind::Package);
+        assert_eq!(pkgs[1].name, "apt");
+        assert_eq!(pkgs[1].version, "2.7.14");
+    }
+
+    #[test]
+    fn test_parse_apt_list_skips_header_and_junk() {
+        // 无 Listing 头；缺 / 的行（"WARNING: apt does not have a stable CLI interface"）跳过
+        let out = "WARNING: apt does not have a stable CLI interface. Use with caution in scripts.\nzsh/stable,now 5.9-1 amd64 [installed]\n";
+        let pkgs = parse_apt_list(out);
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "zsh");
+    }
+
+    #[test]
+    fn test_parse_apt_list_empty() {
+        assert!(parse_apt_list("").is_empty());
+        assert!(parse_apt_list("Listing... Done\n").is_empty());
+    }
+
+    #[test]
+    fn test_parse_apt_list_sorts() {
+        let out = "zsh/stable,now 5.9-1 amd64 [installed]\nalpha/stable,now 1.0 all [installed]\n";
+        let pkgs = parse_apt_list(out);
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "zsh"]);
+    }
+
+    #[test]
+    fn test_parse_apt_autoremove_basic() {
+        let out = "Reading package lists... Done\nBuilding dependency tree... Done\nReading state information... Done\nThe following packages will be REMOVED:\n  libfoo1\n  libbar2\n0 upgraded, 0 newly installed, 2 to remove and 0 not upgraded.\n";
+        assert_eq!(parse_apt_autoremove(out), vec!["libbar2", "libfoo1"]);
+    }
+
+    #[test]
+    fn test_parse_apt_autoremove_multiple_per_line() {
+        let out = "The following packages will be REMOVED:\n  libfoo1 libbar2\n0 upgraded, 0 newly installed, 2 to remove.\n";
+        assert_eq!(parse_apt_autoremove(out), vec!["libbar2", "libfoo1"]);
+    }
+
+    #[test]
+    fn test_parse_apt_autoremove_nothing_to_remove() {
+        // 无 REMOVED 段（"0 upgraded, 0 newly installed, 0 to remove"）→ 空
+        let out = "Reading package lists... Done\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n";
+        assert!(parse_apt_autoremove(out).is_empty());
+    }
+
+    #[test]
+    fn test_parse_apt_rdepends_basic() {
+        let out = "git\nReverse Depends:\n  libngtcp2\n  node\n";
+        assert_eq!(parse_apt_rdepends(out), vec!["libngtcp2", "node"]);
+    }
+
+    #[test]
+    fn test_parse_apt_rdepends_none() {
+        // 无反向依赖：只有头部包名行，无 "Reverse Depends" 段
+        assert!(parse_apt_rdepends("git\n").is_empty());
+        assert!(parse_apt_rdepends("").is_empty());
     }
 }
