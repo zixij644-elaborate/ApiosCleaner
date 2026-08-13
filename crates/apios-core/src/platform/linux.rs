@@ -450,7 +450,7 @@ mod tests {
         let file = tmp.path().join("victim.txt");
         std::fs::write(&file, b"data").unwrap();
 
-        let result = adapter.move_to_trash(&[file.clone()], None);
+        let result = adapter.move_to_trash(std::slice::from_ref(&file), None);
         assert!(result.success);
         assert!(result.blocked.is_empty());
         assert!(result.failed.is_empty());
@@ -481,8 +481,8 @@ mod tests {
         // 两个不同路径但同名文件 → 第二个加 .1 后缀
         std::fs::write(&f1, b"a").unwrap();
         std::fs::write(&f2, b"b").unwrap();
-        let r1 = adapter.move_to_trash(&[f1.clone()], None);
-        let r2 = adapter.move_to_trash(&[f2.clone()], None);
+        let r1 = adapter.move_to_trash(std::slice::from_ref(&f1), None);
+        let r2 = adapter.move_to_trash(std::slice::from_ref(&f2), None);
         assert!(r1.success && r2.success);
         let names: Vec<String> = r2
             .moved
