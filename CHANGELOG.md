@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Linux platform adapter** — a first-class Linux implementation behind
+  the same traits as macOS/Windows (previously "compiles only" with XDG
+  defaults; verified on a Kali arm64 VM):
+  - **App discovery** — scans the XDG application directories for
+    `.desktop` entries (new pure-logic `desktop.rs` parser: `[Desktop
+    Entry]` Name/Exec/Icon/Type/NoDisplay, quoted-path and `env VAR=…`
+    Exec handling); `list` / `uninstall` resolve apps by display name.
+  - **XDG Trash** — `Trash::move_to_trash` rewritten to the freedesktop
+    trash spec: `files/` + `info/` layout, percent-encoded `Path=` and
+    `DeletionDate=` in `.trashinfo`, conflict suffixes (`.1`, `.2`, …),
+    info-write failure rolls the file back. Layout/format logic lives in
+    core (`trash::xdg`); the platform only supplies the trash root.
+    Mount-point trashes (`.Trash-$uid`) are a documented TODO.
+  - **`pkg apt`** — the package-manager abstraction grows an apt backend:
+    `apt list --installed` (2910 packages parsed on the Kali VM),
+    `apt-cache rdepends --installed` for dependents, `remove -y` (config
+    kept; no purge), `autoremove --dry-run` / `-y`; non-root failures
+    hint at `sudo apios pkg apt …` (no implicit elevation).
+  - **dev-clean** — 4 system package-manager caches join the Linux table
+    (APT/DNF/pacman/Snapd; root-owned dirs route through the existing
+    sudo hint); Linux now lists 22 environments.
+  - **ProcessControl** — `pgrep -f` + `kill -TERM` (full-command match
+    avoids the 15-char process-name truncation).
+  - **CI** — new `linux` job (native fmt/clippy/test on ubuntu, release
+    artifact on push); cross-check now covers only the Windows target.
+- **Cross-platform core infrastructure** — shared building blocks the
+  Linux adapter (and future platforms) rely on:
+  - `cmd_util`: external-command runner + freed-space regex parsing;
+    homebrew and winget now execute through it (one runner for all
+    package managers).
+  - `PkgKind::Package` — apt/snap style managers have no formula/cask
+    split; `supported_kinds()` lets each manager declare its kinds.
+  - `desktop.rs` — freedesktop `.desktop` parser (pure text, unit-tested).
+  - shared dev-env table — 10 environments with identical paths on macOS
+    and Linux (Cargo, Go Modules, Gradle, …) are defined once in core;
+    the macOS 25 / Linux 22 environment sets are unchanged.
 - **`clean-orphan` interactive selection** — candidates are listed with
   numbers; type `1,3-5` (single numbers and ranges), `a`/`all`, or Enter to
   cancel. Only the selected files are moved, so deliberate leftovers (a
@@ -18,6 +54,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selection parser (ranges, dedup, out-of-range, garbage input).
 - **Planned, not yet implemented**: filtering by name/path arguments
   (`apios clean-orphan <name>`) for scripted selective deletion.
+
+### Fixed
+
+- **Orphan-scan trash exclusion** — the `skip_reverse` name substring
+  ("trash") is replaced by component-level `conditions::is_in_trash`
+  (`.Trash` / `Trash` / `.Trash-` prefix). Previously any directory whose
+  name contained "trash" was skipped as a false positive, while Linux XDG
+  trash and mount-point trashes only matched by coincidence.
+- **Linux first-run trash dirs** — `move_to_trash` now creates `files/`
+  and `info/` on first use (a fresh HOME has no trash layout yet; caught on
+  the Kali VM walkthrough).
+- **Linux CLI app lookup** — `find_app_by_name` looked for `<name>.app`
+  on Linux; it now matches against the `.desktop` discovery results
+  (caught on the Kali VM walkthrough).
 
 ## [0.2.0] - 2026-08-12
 
