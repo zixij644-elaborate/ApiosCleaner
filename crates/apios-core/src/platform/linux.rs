@@ -140,6 +140,34 @@ impl Trash for LinuxAdapter {
         let mut moved: Vec<FilePair> = Vec::new();
         let mut blocked: Vec<PathBuf> = Vec::new();
         let mut failed: Vec<PathBuf> = Vec::new();
+        // 首次使用时创建 files/ 与 info/（失败 → 全部 failed，语义同
+        // move_to_trash_dir 的 create_dir_all 失败路径）
+        if let Err(e) = std::fs::create_dir_all(&files_dir) {
+            eprintln!(
+                "apios: cannot create trash dir {}: {e}",
+                files_dir.display()
+            );
+            return DeleteResult {
+                success: false,
+                bundle_folder: files_dir,
+                moved,
+                blocked,
+                failed: urls.to_vec(),
+            };
+        }
+        if let Err(e) = std::fs::create_dir_all(&info_dir) {
+            eprintln!(
+                "apios: cannot create trash info dir {}: {e}",
+                info_dir.display()
+            );
+            return DeleteResult {
+                success: false,
+                bundle_folder: files_dir,
+                moved,
+                blocked,
+                failed: urls.to_vec(),
+            };
+        }
         for url in urls {
             // 安全校验（critical 路径拦截）先于一切
             if !validate_path(&url.to_string_lossy()) {
@@ -428,13 +456,13 @@ mod tests {
         }
     }
 
-    /// XDG trash 集成测试：构造临时 HOME 的 LinuxAdapter，验证 files/+info/ 布局、
-    /// trashinfo 内容与冲突后缀。
+    /// XDG trash 集成测试：构造临时 HOME 的 LinuxAdapter（不预建 files/info ——
+    /// move_to_trash 必须自己创建），验证 files/+info/ 布局、trashinfo 内容与
+    /// 冲突后缀。
     fn adapter_with_trash(tmp: &Path) -> (LinuxAdapter, PathBuf) {
         let home = tmp.join("home");
         let trash = home.join(".local/share/Trash");
-        std::fs::create_dir_all(trash.join("files")).unwrap();
-        std::fs::create_dir_all(trash.join("info")).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
         let adapter = LinuxAdapter {
             home: home.to_string_lossy().into_owned(),
             cache_dir: String::new(),
