@@ -12,6 +12,10 @@ use chrono::Local;
 
 use crate::platform::{SystemPaths, Trash};
 
+/// XDG Trash 规范（freedesktop）的结构与格式逻辑 —— 纯函数，平台无关。
+/// Linux 适配器的 `Trash` 实现用它生成/解析 trashinfo 与 files/info 布局。
+pub mod xdg;
+
 /// 受保护文件检测：
 /// POSIX rename 语义 —— 需要的是**父目录**可写，而非条目自身（条目只读不影响 mv）。
 /// 只测父目录可写（测条目本身会把只读文件误报为受保护）。

@@ -88,6 +88,11 @@ pub trait DevEnvPaths {
 pub trait PackageManager {
     /// 选择器名（CLI 输入），如 "brew"
     fn name(&self) -> &str;
+    /// 本管理器支持的包种类（brew: formula+cask 两类；winget/apt: 单一）。
+    /// CLI 按此遍历 `list_installed` 分组展示与做种类判定。
+    fn supported_kinds(&self) -> Vec<crate::pkg::PkgKind> {
+        vec![crate::pkg::PkgKind::Formula, crate::pkg::PkgKind::Cask]
+    }
     /// 已安装的某类包列表（name + version + kind）
     fn list_installed(&self, kind: crate::pkg::PkgKind)
         -> Result<Vec<crate::pkg::PkgInfo>, String>;
@@ -133,7 +138,11 @@ pub trait PackageManagers {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-mod fallback;
+mod apt;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod linux;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub use apt::Apt;
 #[cfg(target_os = "macos")]
 mod homebrew;
 #[cfg(target_os = "macos")]
@@ -167,7 +176,7 @@ pub type Adapter = macos::MacOsAdapter;
 #[cfg(target_os = "windows")]
 pub type Adapter = windows::WindowsAdapter;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub type Adapter = fallback::FallbackAdapter;
+pub type Adapter = linux::LinuxAdapter;
 
 /// 当前平台的适配器实例（进程级单例）。
 /// 适配器只持有路径表等不可变数据，每次调用重建是纯浪费 —— macOS 每次

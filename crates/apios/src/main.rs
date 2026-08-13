@@ -30,7 +30,7 @@ use apios_core::dev_env::{dedup_nested, dir_size, env_sizes, expand_globs, expan
 use apios_core::locations::Locations;
 use apios_core::model::{AppInfo, Sensitivity};
 use apios_core::orphan::ReversePathsSearcher;
-use apios_core::pkg::{detect_kind, PkgKind};
+use apios_core::pkg::PkgKind;
 #[cfg(target_os = "macos")]
 use apios_core::platform::lipo::{self, cpu_name, current_cputype, select_runnable_slice, FatFile};
 use apios_core::platform::{
@@ -833,7 +833,7 @@ fn kind_plural(kind: PkgKind) -> &'static str {
 }
 
 fn cmd_pkg_list(pm: &dyn PackageManager) {
-    for kind in [PkgKind::Formula, PkgKind::Cask] {
+    for kind in pm.supported_kinds() {
         let pkgs = match pm.list_installed(kind) {
             Ok(p) => p,
             Err(e) => {
@@ -860,21 +860,23 @@ fn cmd_pkg_list(pm: &dyn PackageManager) {
 }
 
 fn cmd_pkg_uninstall(cli: &Cli, pm: &dyn PackageManager, name: &str, zap: bool) {
-    // 1. 种类判定（两表本地查询）
-    let (formulae, casks) = match (
-        pm.list_installed(PkgKind::Formula),
-        pm.list_installed(PkgKind::Cask),
-    ) {
-        (Ok(f), Ok(c)) => (
-            f.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
-            c.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
-        ),
-        (Err(e), _) | (_, Err(e)) => {
-            eprintln!("apios: {}: {e}", pm.name());
-            exit(1);
+    // 1. 种类判定（按 PM 支持的 kinds 拉列表，逐个匹配；brew 先 formula 后 cask，
+    //    与 detect_kind 的优先级一致；apt 仅 Package 一类）
+    let mut found_kind: Option<PkgKind> = None;
+    for kind in pm.supported_kinds() {
+        let list = match pm.list_installed(kind) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("apios: {}: {e}", pm.name());
+                exit(1);
+            }
+        };
+        if list.iter().any(|p| p.name == name) {
+            found_kind = Some(kind);
+            break;
         }
-    };
-    let Some(kind) = detect_kind(name, &formulae, &casks) else {
+    }
+    let Some(kind) = found_kind else {
         eprintln!(
             "apios: {}: \"{name}\" is not installed (run `apios pkg {} list`).",
             pm.name(),

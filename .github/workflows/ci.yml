@@ -25,18 +25,46 @@ jobs:
       - name: test
         run: cargo test --all
 
+  # Linux 原生测试：apt 解析 / XDG trash / .desktop 发现 / dev-env 表的真实运行。
+  # cross-check 只编译不运行 —— Linux 逻辑必须 native 验证（Windows job 不跑
+  # clippy 曾丢代码的教训）。push 到 main 时额外产出 release 二进制 artifact，
+  # 供 Kali VM 等真机走查直接下载。
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test (Linux native)
+        run: cargo test --all
+      - name: build (release)
+        if: github.event_name == 'push'
+        run: cargo build --release --locked
+      - name: upload artifact (Linux x86_64)
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apios-linux-x86_64
+          path: target/release/apios
+          if-no-files-found: error
+
   # 跨平台类型检查：核心引擎必须能在非 macOS 目标上编译
-  # （适配层落地后 macOS 专属代码不得进入 Linux/Windows 构建）
+  # （适配层落地后 macOS 专属代码不得进入 Windows 构建）。
+  # Linux 的 native 编译/测试已由 linux job 覆盖，此处只保留 Windows target。
   cross-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu, x86_64-pc-windows-gnu
+          targets: x86_64-pc-windows-gnu
       - uses: Swatinem/rust-cache@v2
-      - name: check (Linux target)
-        run: cargo check --workspace --target x86_64-unknown-linux-gnu
       - name: check (Windows target)
         run: cargo check --workspace --target x86_64-pc-windows-gnu
 
