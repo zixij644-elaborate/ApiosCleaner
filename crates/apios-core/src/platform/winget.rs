@@ -213,15 +213,17 @@ mod tests {
 
     #[test]
     fn test_winget_error_tail_for_long_stderr() {
-        // 长 stderr → 尾部 5 行
+        // stderr 首行 ≥160 字符（不是 --help 提示形态）→ 尾部 5 行
+        let long_head = "x".repeat(200);
         let out = cmd_util::CommandOutput {
             status: std::process::ExitStatus::default(),
             stdout: String::new(),
-            stderr: "l1\nl2\nl3\nl4\nl5\nl6\nl7\n".to_string(),
+            stderr: format!("{long_head}\nl2\nl3\nl4\nl5\nl6\nl7\n"),
         };
         let msg = winget_error(&out);
         assert!(msg.starts_with("winget failed:\nl3"), "msg: {msg}");
         assert!(!msg.contains("l1"), "不应含首行");
+        assert!(!msg.contains("l2"), "不应含首行后第一行");
     }
 
     #[test]
