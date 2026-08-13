@@ -14,15 +14,6 @@ use crate::matcher::{should_skip_item, specific_condition};
 use crate::model::{AppInfo, Condition, Sensitivity, SkipCondition};
 use crate::platform::{SpotlightIndex, SystemPaths};
 
-/// 组件级回收站判断：路径中存在名为 `.Trash` 的路径段。
-/// 子串匹配（`contains(".Trash")`）会误伤名为 ".TrashFoo" / "Foo.Trash"
-/// 的普通目录；组件判断仅命中真正的回收站段。
-fn is_in_trash(path_str: &str) -> bool {
-    Path::new(path_str)
-        .components()
-        .any(|c| c.as_os_str() == ".Trash")
-}
-
 pub struct AppPathFinder<'a> {
     pub app: &'a AppInfo,
     pub identifiers: CachedIdentifiers,
@@ -69,7 +60,7 @@ impl<'a> AppPathFinder<'a> {
         let path_str = self.app.path.to_string_lossy().to_string();
         // .Trash 检测用组件级判断：contains(".Trash") 会误拦
         // 名为 ".TrashFoo" / "Foo.Trash" 的普通目录
-        if !is_in_trash(&path_str) {
+        if !conditions::is_in_trash(&path_str) {
             let parent_name = self
                 .app
                 .path
@@ -266,8 +257,8 @@ impl<'a> AppPathFinder<'a> {
         }
 
         // 唯一结果是回收站内文件 → 清空。
-        // 组件级 .Trash 判断（见 is_in_trash —— 子串匹配会误伤普通目录名）
-        if filtered.len() == 1 && is_in_trash(&filtered[0].to_string_lossy()) {
+        // 组件级回收站判断（conditions::is_in_trash —— 子串匹配会误伤普通目录名）
+        if filtered.len() == 1 && conditions::is_in_trash(&filtered[0].to_string_lossy()) {
             filtered.clear();
         }
 

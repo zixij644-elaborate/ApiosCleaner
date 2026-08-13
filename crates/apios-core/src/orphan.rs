@@ -295,6 +295,12 @@ impl ReversePathsSearcher {
     fn process_item(&mut self, scanned_item_name: &str, path: &Path) {
         let normalized_item_path = pear_format(&path.to_string_lossy());
 
+        // 回收站排除（组件级：macOS ~/.Trash、Linux XDG Trash、挂载点
+        // .Trash-$uid）—— 回收站内容不是孤儿
+        if conditions::is_in_trash(&normalized_item_path) {
+            return;
+        }
+
         // 排除列表（fsm.fileFolderPathsZ 用户异常列表，CLI 默认空）+ dsstore 等
         if normalized_item_path.contains("dsstore")
             || normalized_item_path.contains("daemonnameoridentifierhere")

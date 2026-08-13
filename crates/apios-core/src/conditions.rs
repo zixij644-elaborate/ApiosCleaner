@@ -1,11 +1,23 @@
 //! 每应用条件表 / 跳过表 —— 按应用（bundle id）归类的包含/排除/跳过规则
 //! 注意：bundle_id/include/exclude 在构造时 pearFormat；force 路径仅保留磁盘上存在的
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::format::pear_format;
 use crate::model::{Condition, SkipCondition};
 use crate::platform::SystemPaths;
+
+/// 组件级回收站判断：路径中存在名为 `.Trash`、`Trash` 或以 `.Trash-` 开头的
+/// 路径段（macOS `~/.Trash`、Linux XDG `~/.local/share/Trash`、各挂载点
+/// `.Trash-$uid`）。子串匹配（`contains(".Trash")`/`contains("trash")`）会误伤
+/// 名为 ".TrashFoo" / "Foo.Trash" / "trash-bin" 的普通目录；组件判断仅命中
+/// 真正的回收站段。
+pub fn is_in_trash(path_str: &str) -> bool {
+    Path::new(path_str).components().any(|c| {
+        let name = c.as_os_str();
+        name == ".Trash" || name == "Trash" || name.to_string_lossy().starts_with(".Trash-")
+    })
+}
 
 fn cond(
     bundle_id: &str,
@@ -464,7 +476,6 @@ pub fn skip_reverse() -> std::collections::HashSet<String> {
         "ds_store",
         "caches",
         "crashreporter",
-        "trash",
         "pearcleaner",
         "amsdatamigratortool",
         "arfilecache",
@@ -550,6 +561,26 @@ mod tests {
         assert!(skip_deep_search().contains("Safari"));
         assert!(!skip_reverse().is_empty());
         assert!(skip_reverse().contains("microsoft"));
+        // "trash" 子串条目已移除 —— 回收站排除走组件级 is_in_trash
+        assert!(!skip_reverse().contains("trash"));
+    }
+
+    #[test]
+    fn test_is_in_trash_component_matching() {
+        // 三种回收站形态
+        assert!(is_in_trash("/Users/u/.Trash/SomeApp.app"));
+        assert!(is_in_trash("/home/u/.local/share/Trash/files/x"));
+        assert!(is_in_trash("/mnt/data/.Trash-1000/files/x"));
+        // 普通目录不误伤（子串匹配会命中的形态）
+        assert!(!is_in_trash("/Users/u/projects/.TrashFoo/x"));
+        assert!(!is_in_trash("/Users/u/notes/trash-bin/x"));
+        assert!(!is_in_trash("/Users/u/Foo.Trash"));
+        assert!(!is_in_trash("/Users/u/Desktop"));
+        assert!(!is_in_trash(""));
+    }
+
+    #[test]
+    fn test_skip_conditions_singleton() {
         assert_eq!(skip_conditions().len(), 1);
     }
 }
