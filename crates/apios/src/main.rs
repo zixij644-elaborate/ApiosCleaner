@@ -1497,7 +1497,9 @@ fn select_orphans(cli: &Cli, found: &[PathBuf]) -> Vec<PathBuf> {
     }
     println!("\nFound {} orphaned files:", found.len());
     for (i, p) in found.iter().enumerate() {
-        println!("  {:>3}. {}", i + 1, p.display());
+        // 受保护项（root 所有等不可写）标注 [sudo] —— 可跳过，不整体拦截
+        let mark = if is_writable(p) { "" } else { " [sudo]" };
+        println!("  {:>3}. {}{}", i + 1, p.display(), mark);
     }
     loop {
         print!("\nEnter numbers to delete (1,3-5), 'a' for all, Enter to cancel: ");
@@ -1529,8 +1531,9 @@ fn cmd_clean_orphan(cli: &Cli, except: &[String]) {
         return;
     }
 
-    check_protected(&found, "apios clean-orphan");
-
+    // 不做整体 check_protected：clean-orphan 是**选择性**删除，个别受保护项
+    // （root 所有等）由交互列表标注 [sudo] 供用户跳过；选中后被拒的项走 failed
+    // 报告并提示 sudo。整体拦截会强制用户为清理一个孤儿而 sudo 整条命令。
     let selected = select_orphans(cli, &found);
     if selected.is_empty() {
         return;
@@ -1552,6 +1555,9 @@ fn cmd_clean_orphan(cli: &Cli, except: &[String]) {
             eprintln!(
                 "Failed to delete {} files (in use or protected).",
                 result.failed.len()
+            );
+            eprintln!(
+                "Hint: re-run with sudo to delete protected files (sudo apios clean-orphan)."
             );
         }
         exit(0);
