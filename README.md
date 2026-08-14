@@ -2,6 +2,8 @@
 
 # ApiosCleaner
 
+[![CI](https://github.com/zixij644-elaborate/ApiosCleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/zixij644-elaborate/ApiosCleaner/actions/workflows/ci.yml)
+
 *ἄπιος (ápios) — ancient Greek for "pear"*
 
 A fast cross-platform app cleaner with a portable Rust core. It started as a

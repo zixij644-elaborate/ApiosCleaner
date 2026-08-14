@@ -2,6 +2,8 @@
 
 # ApiosCleaner
 
+[![CI](https://github.com/zixij644-elaborate/ApiosCleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/zixij644-elaborate/ApiosCleaner/actions/workflows/ci.yml)
+
 *ἄπιος (ápios) — 古希腊语「梨」*
 
 一款快速的跨平台应用清理工具，核心采用可移植的 Rust 引擎。它起源于
