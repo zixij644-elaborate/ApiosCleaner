@@ -68,7 +68,11 @@ impl<'a> AppPathFinder<'a> {
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            let modified = if parent_name.contains("Wrapper") {
+            // 真实 wrapped 结构是 `<Container>.app/Wrapper/<RealApp>.app` —— 父目录
+            // 名就是 "Wrapper"，精确比较即可。contains 子串会把装在
+            // WrapperApps/MyWrapper/WineWrapper 等目录里的应用误判为 wrapped，
+            // 上跳到用户目录 —— 整个目录进删除列表（2026-08-15 审查 P0-1）。
+            let modified = if parent_name == "Wrapper" {
                 self.app
                     .path
                     .parent()
@@ -321,6 +325,25 @@ mod tests {
             finder.collection.iter().collect::<Vec<_>>(),
             vec![&PathBuf::from("/Users/wrapperx/Applications/SomeApp.app")],
             "普通应用只插入自身"
+        );
+    }
+
+    /// 回归（2026-08-15 审查 P0-1）：**紧邻父目录**名含 "Wrapper" 子串（非精确
+    /// 等于 Wrapper）也不得上跳 —— 之前 contains 会把装在
+    /// /Users/u/Projects/WrapperApps 等目录里的应用上跳到 Projects，整目录进删除列表
+    #[test]
+    fn test_initial_url_processing_parent_contains_wrapper_no_jump() {
+        let app = AppInfo {
+            path: PathBuf::from("/Users/u/Projects/WrapperApps/SomeApp.app"),
+            ..make_app("com.test.app", "SomeApp")
+        };
+        let loc = Locations::new();
+        let mut finder = AppPathFinder::new(&app, &loc, Sensitivity::Strict);
+        finder.initial_url_processing();
+        assert_eq!(
+            finder.collection.iter().collect::<Vec<_>>(),
+            vec![&PathBuf::from("/Users/u/Projects/WrapperApps/SomeApp.app")],
+            "父目录名含 Wrapper 子串的普通应用只插入自身"
         );
     }
 
