@@ -101,7 +101,7 @@ apios list SomeApp
 
 # Uninstall an app: the bundle and ALL related files, moved to Trash
 apios uninstall SomeApp
-apios uninstall SomeApp --except ~/Projects/foo   # keep that path
+apios uninstall SomeApp --except ~/Projects/foo   # keep that path (unmatched terms warn)
 
 # List orphaned files left behind by uninstalled apps (read-only;
 # numbered identically to clean-orphan, protected entries marked [sudo])
@@ -124,7 +124,8 @@ apios dev-clean cargo
 
 # Clean system temporary directories ($TMPDIR + /tmp + /var/tmp / %TEMP%):
 # entries not touched for 7 days (default) — X-session/systemd/com.apple
-# service dirs, sockets and locks are protected
+# service dirs, sockets and locks are protected; a directory counts as
+# fresh when any of its children is fresh
 apios clean-tmp
 apios clean-tmp --older-than 1    # only entries untouched for 1+ days
 

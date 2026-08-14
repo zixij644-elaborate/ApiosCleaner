@@ -93,7 +93,7 @@ apios list SomeApp
 
 # 卸载应用：应用本体 + 全部关联文件 → 回收站
 apios uninstall SomeApp
-apios uninstall SomeApp --except ~/Projects/foo   # 保留该路径
+apios uninstall SomeApp --except ~/Projects/foo   # 保留该路径（未匹配项会警告）
 
 # 列出已卸载应用留下的孤儿文件（只读；编号与 clean-orphan 完全一致，
 # 受保护条目标注 [sudo]）
@@ -115,7 +115,7 @@ apios dev-clean cargo
 
 # 清理系统临时目录（$TMPDIR + /tmp + /var/tmp / %TEMP%）：
 # 只删 7 天（默认）前未触碰的条目——X 会话/systemd/com.apple 服务目录、
-# socket 和锁文件受保护
+# socket 和锁文件受保护；目录只要含新鲜子项即视为新鲜
 apios clean-tmp
 apios clean-tmp --older-than 1    # 只删 1 天前未触碰的条目
 

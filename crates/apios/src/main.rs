@@ -135,7 +135,8 @@ promise every binary on disk:\n  \
 • macOS — .app bundles in the default application folders\n  \
 • Windows — registry uninstall entries + Start Menu .lnk (portable apps \
 without registration are not listed)\n  \
-• Linux — .desktop files in the XDG application directories\n\n\
+• Linux — .desktop files in the XDG application directories \
+(NoDisplay/Hidden apps are installed too and are listed)\n\n\
 Useful as an overview and to pick an app for `apios list` / `uninstall`.",
         after_long_help = "EXAMPLES:\n  \
 apios apps\n  \
@@ -185,6 +186,8 @@ apios uninstall Firefox --except ~/Projects/foo    # keep that directory"
         /// Skip paths that match — exact path, or everything under this directory.
         /// Repeatable; useful when discovery pulls in unrelated same-name data
         /// (e.g. a source checkout next to the app's own data).
+        /// A term that matches nothing in the delete list prints a warning
+        /// (silent no-ops could let a keep-list be deleted anyway).
         #[arg(long, value_name = "PATH", action = clap::ArgAction::Append)]
         except: Vec<String>,
     },
@@ -235,7 +238,9 @@ apios clean-orphan pear -y          # ...and delete them without prompting"
         long_about = "Clean temporary directories — system /tmp and /var/tmp (macOS/Linux) \
 and %TEMP% (Windows), which the OS does not clean automatically.\n\n\
 Safety:\n  \
-• only entries not touched for --older-than days (default 7) are considered\n  \
+• only entries not touched for --older-than days (default 7) are considered; \
+a directory counts as fresh when any of its children is fresh (in-place content \
+rewrites do not bump the dir mtime)\n  \
 • protected entries are skipped: X-session runtime files (.X11-unix, .X0-lock, …), \
 systemd-private service dirs, sockets and *.lock\n  \
 • you confirm before anything moves; files go to the Trash/Recycle Bin",

@@ -33,6 +33,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Full-audit P1 batch (2026-08-15)** — from the all-code review:
+  - wrapped-app jump now requires the parent dir to be exactly
+    `Wrapper` (a `contains` match could pull a whole user directory
+    into the delete list — P0)
+  - `restore_files` no longer overwrites a file rebuilt at the
+    original location
+  - `clean-tmp` treats a directory as fresh when any child is fresh
+    (in-place content rewrites do not bump the dir mtime)
+  - Linux process control no longer kills the CLI itself (ps +
+    executable-name match instead of `pgrep -f`, which matched apios'
+    own command line)
+  - macOS mdfind output is drained on a reader thread — large result
+    sets no longer block and silently vanish
+  - macOS falls back to `getpwuid` when `$HOME` is missing (was
+    `/Users/`, which scanned other users' homes)
+  - macOS cask apps (symlink bundles) are now matched for
+    termination via `canonicalize`
+  - `--except` reports terms that match nothing (was a silent no-op
+    that could let a keep-list be deleted anyway)
+  - Linux `.desktop` discovery now produces NoDisplay/Hidden apps
+    (they are installed — skipping them made their data report as
+    orphans), dedupes same-name entries and skips empty names
+  - Linux XDG trash checks both `files/` and `info/` for name
+    conflicts; cross-volume deletion falls back to copy
+  - Windows: missing paths classify as NotFound; winget PATH probing
+    ignores relative segments
+  - apt `rdepends` strips the `|` alternative-dependency prefix
+
 - **`orphan` / `clean-orphan` warn when run as root** — `sudo` resets
   `HOME`/`PATH`, so the package-manager and extension-registry
   exclusions are lost and the orphan list silently grows with live
