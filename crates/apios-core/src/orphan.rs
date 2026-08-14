@@ -9,7 +9,7 @@ use crate::conditions;
 use crate::format::pear_format;
 use crate::locations::Locations;
 use crate::model::{AppInfo, Condition};
-use crate::platform::SystemPaths;
+use crate::platform::{PackageManagers, SystemPaths};
 
 /// UUID 容器目录名（containerNameByUUID 正则）
 static UUID_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
@@ -107,6 +107,79 @@ fn path_needle_qualifies(s: &str) -> bool {
     s.chars().count() >= 3
 }
 
+/// 扩展宿主注册目录清单（跨平台数据表：VSCode 家族；可扩充——新宿主加一行）。
+/// 机制通用：扫描注册目录内所有扩展 → 提取 ID 尾段，不硬编码具体扩展名。
+const EXTENSION_REGISTRIES: [&str; 2] = ["~/.vscode/extensions", "~/.cursor/extensions"];
+
+/// 扩展 ID 尾段 needle 门槛：≥2 字符。尾段来自真实扩展 ID（非任意短词），
+/// 短名（go）的豁免面是安全方向——宁可漏报不误删。
+fn extension_needle_qualifies(s: &str) -> bool {
+    s.chars().count() >= 2
+}
+
+/// 扩展目录名 → 尾段 needle（纯函数）。目录名形态 `<publisher>.<name>-<version>`
+/// （publisher/name 均不含点；name 可含连字符——rust-analyzer；版本段总以
+/// **数字开头**——0.56.0、3.20.199-darwin-arm64）。尾段 = 首个 `.` 之后、
+/// 截断到第一个数字开头的 `-` 段：golang.go-0.56.0 → go、
+/// ms-dotnettools.csdevkit-3.20.199 → csdevkit、
+/// rust-lang.rust-analyzer-0.3.3008-darwin-arm64 → rust-analyzer。
+/// 无 ID 结构（无 `.`）→ None。
+fn extension_tail_needle(dir_name: &str) -> Option<String> {
+    let (_, after_dot) = dir_name.split_once('.')?;
+    let mut tail = after_dot;
+    for (idx, ch) in after_dot.char_indices() {
+        if ch == '-'
+            && after_dot[idx + 1..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit())
+        {
+            tail = &after_dot[..idx];
+            break;
+        }
+    }
+    let f = pear_format(tail);
+    extension_needle_qualifies(&f).then_some(f)
+}
+
+/// 扫描扩展注册目录，提取扩展 ID 尾段作为孤儿豁免 needle。
+/// 仅处理目录条目（跳过 extensions.json 等元数据文件）。
+fn extension_needles(home: &str) -> Vec<String> {
+    let mut needles = Vec::new();
+    for reg in EXTENSION_REGISTRIES {
+        let dir = std::path::PathBuf::from(reg.replace('~', home));
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                continue;
+            }
+            if let Some(n) = entry.file_name().to_str().and_then(extension_tail_needle) {
+                needles.push(n);
+            }
+        }
+    }
+    needles
+}
+
+/// 系统组件 needle（输入法等稳定清单，数据表可扩充）。
+/// 孤儿扫描不扫输入法本体目录（~/.library/Input Methods 不在 reverse_paths），
+/// 但其 Caches/HTTPStorages/Preferences/WebKit 数据在扫描范围——按名豁免。
+/// 短名（sogou/wetype）匹配面是安全方向。
+fn system_component_needles() -> Vec<String> {
+    [
+        "wetype",
+        "tencentinputmethod",
+        "sogou",
+        "baiduinput",
+        "qqpinyin",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 impl ReversePathsSearcher {
     pub fn new(locations: Locations, sorted_apps: Vec<AppInfo>) -> ReversePathsSearcher {
         let home = crate::platform::adapter().home();
@@ -191,6 +264,43 @@ impl ReversePathsSearcher {
                 }
             }
         }
+
+        // ② 包管理器已装包名（通用机制：各平台注册的 PM 全纳入）。
+        // brew cask/CLI（dotnet）、winget、apt 安装的包其数据目录
+        // （Application Support/dotnet 等）不该报孤儿 —— 包还装着。
+        // 门槛沿用 needle_qualifies（≥5）：短包名（git/zsh）被过滤是
+        // 安全方向（漏报不误删）。list_installed 失败（PM 缺失/报错）静默跳过。
+        // 另派生包名前缀 needle：cask 常带后缀（dotnet-sdk/android-cli），
+        // 数据目录名是前缀段（Application Support/dotnet）—— 前缀段
+        // pearFormat 后与包名不同，contains 匹配不上，需单独派生。
+        for pm in crate::platform::adapter().package_managers() {
+            for kind in pm.supported_kinds() {
+                if let Ok(pkgs) = pm.list_installed(kind) {
+                    for pkg in pkgs {
+                        let f = pear_format(&pkg.name);
+                        if needle_qualifies(&f) {
+                            needles.push(f);
+                        }
+                        if let Some(prefix) = pkg.name.split('-').next() {
+                            let f = pear_format(prefix);
+                            if needle_qualifies(&f) {
+                                needles.push(f);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ③④ 扩展宿主 + 系统组件（通用机制，数据表驱动）：
+        // - 扩展宿主：扫描扩展注册目录（~/.vscode/extensions 等），提取扩展
+        //   ID 尾段（golang.go → go）——扩展本体数据（Application Support/go、
+        //   csdevkit）不再报孤儿。门槛 ≥2：尾段来自真实扩展 ID，短名豁免面
+        //   是安全方向（宁可漏报不误删）。
+        // - 系统组件：输入法等稳定清单（wetype 等），数据表可扩充。
+        needles.extend(extension_needles(&home));
+        needles.extend(system_component_needles());
+
         needles.sort();
         needles.dedup();
         bundle_needles.sort();
@@ -430,6 +540,60 @@ mod tests {
         assert!(is_uuid_formatted("5A2E3F1B0C4D4E5F8A9B0C1D2E3F4A5B"));
         assert!(!is_uuid_formatted("notauuid"));
         assert!(!is_uuid_formatted("5A2E3F1B0C4D4E5F8A9B0C1D2E3F4A5"));
+    }
+
+    #[test]
+    fn test_extension_tail_needle_basic() {
+        // golang.go-0.56.0 → 尾段 go（2 字符门槛通过）
+        assert_eq!(
+            extension_tail_needle("golang.go-0.56.0"),
+            Some("go".to_string())
+        );
+        // 发布者含连字符：ms-dotnettools.csdevkit-3.20.199-darwin-arm64 → csdevkit
+        assert_eq!(
+            extension_tail_needle("ms-dotnettools.csdevkit-3.20.199-darwin-arm64"),
+            Some("csdevkit".to_string())
+        );
+        // name 含连字符（rust-analyzer），版本段可含点/连字符：
+        // rust-lang.rust-analyzer-0.3.3008-darwin-arm64 → rust-analyzer
+        assert_eq!(
+            extension_tail_needle("rust-lang.rust-analyzer-0.3.3008-darwin-arm64"),
+            Some("rustanalyzer".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extension_tail_needle_edge_cases() {
+        // 无 `.` 结构（元数据文件形态，调用方按目录过滤但纯函数不崩溃）→ None
+        assert_eq!(
+            extension_tail_needle("extensions.json"),
+            Some("json".to_string())
+        );
+        assert_eq!(extension_tail_needle("no-dot-name"), None);
+        // 单字符尾段（低于 ≥2 门槛）
+        assert_eq!(extension_tail_needle("pub.n-1.0"), None);
+        // 空尾段
+        assert_eq!(extension_tail_needle("pub.-1.0"), None);
+    }
+
+    #[test]
+    fn test_system_component_needles_cover_wechat_input() {
+        // WeType 场景（验收误报实例）：Caches/WeType、HTTPStorages、
+        // Preferences、WebKit 数据目录名应被豁免 needle 覆盖
+        let needles = system_component_needles();
+        let all = needles.join("|");
+        for path in [
+            "cacheswetype",
+            "comtencentwetypeinstallerapp",
+            "comtencentinputmethodwetype",
+            "comtencentwetypesettings",
+            "comsogouinputmethodsogou",
+        ] {
+            assert!(
+                needles.iter().any(|n| path.contains(n.as_str())),
+                "{path} 应被系统组件 needle 覆盖（needles: {all}）"
+            );
+        }
     }
 
     #[test]
@@ -711,9 +875,10 @@ mod tests {
     }
 
     #[test]
-    fn test_no_needles_means_no_regex() {
-        // 无合格标识（短 ASCII 名 + 空 bundle id）→ needles_regex 为 None，
-        // is_related_to_installed_app 直接短路（不构造空 Alternation）
+    fn test_system_needles_keep_regex_working() {
+        // 即使无合格应用标识（短 ASCII 名 + 空 bundle id），系统组件 needle
+        // 恒在 → needles_regex 非 None（输入法数据始终豁免），
+        // is_related_to_installed_app 对输入法数据命中
         let app = AppInfo {
             path: PathBuf::from("/Applications/X.app"),
             bundle_identifier: "com.x".to_string(),
@@ -726,8 +891,13 @@ mod tests {
         };
         let locations = Locations::new();
         let searcher = ReversePathsSearcher::new(locations, vec![app]);
-        assert!(searcher.needles_regex.is_none());
-        let p = Path::new("/Users/u/Library/Preferences/com.x");
-        assert!(!searcher.is_related_to_installed_app(p, &pear_format(&p.to_string_lossy())));
+        // 系统组件 needle（wetype 等）恒在
+        assert!(searcher.needles_regex.is_some());
+        // 输入法数据目录被豁免（不再报孤儿）
+        let p = Path::new("/Users/u/Library/Caches/WeType");
+        assert!(searcher.is_related_to_installed_app(p, &pear_format(&p.to_string_lossy())));
+        // 无关路径不命中
+        let q = Path::new("/Users/u/Library/Preferences/com.x");
+        assert!(!searcher.is_related_to_installed_app(q, &pear_format(&q.to_string_lossy())));
     }
 }

@@ -17,6 +17,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Orphan-scan accuracy: the installed set now includes package
+  managers, extension hosts and system components** — previously only
+  `.app` bundles were "installed", so active tooling data was reported
+  as orphaned (macOS walkthrough: 24 orphans, of which 13 were live
+  VSCode-extension / input-method / brew-cask data). Three generic
+  sources join the needles, driven by data tables not hardcoded apps:
+  - package-manager package names (via the `PackageManagers` trait,
+    incl. a prefix derivation for `-sdk`/`-cli` style cask names);
+  - extension registries (`~/.vscode/extensions`, `~/.cursor/extensions`):
+    each extension's ID tail (`golang.go` → `go`) protects its data dir;
+  - a system-component table (input methods: wetype/sogou/…).
+  Real-machine result: 24 → 9 orphans, false positives cleared while
+  genuine leftovers (Pearcleaner residue, …) are kept. Layer principle
+  from BleachBit: regenerable data (Caches/) may be misjudged
+  acceptably; non-regenerable (extensions, preferences) is protected.
+
 - **Deletion failures are classified and reported per file** — the previous
   "failed to delete N file(s)" gave no reason. Each failed path now reports
   its cause (not found / permission denied with a sudo hint / in use /
