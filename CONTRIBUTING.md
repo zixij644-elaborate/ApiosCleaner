@@ -10,7 +10,7 @@ cleaner with a portable Rust core and a per-OS adapter layer. Please read
 ## Getting started
 
 ```sh
-git clone git@github.com:Zniece/ApiosCleaner.git
+git clone git@github.com:zixij644-elaborate/ApiosCleaner.git
 cd ApiosCleaner
 cargo build
 cargo test --all

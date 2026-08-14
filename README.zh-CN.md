@@ -41,7 +41,7 @@
 ## 安装
 
 **预编译二进制**（推荐）——从
-[GitHub Releases](https://github.com/Zniece/ApiosCleaner/releases/latest)
+[GitHub Releases](https://github.com/zixij644-elaborate/ApiosCleaner/releases/latest)
 下载最新版本，解压后加入 PATH：
 
 ```sh
@@ -57,7 +57,7 @@ unzip apios-macos-arm64.zip -d ~/bin        # 或 apios-macos-x86_64.zip
 或者从源码构建（macOS）：
 
 ```sh
-git clone git@github.com:Zniece/ApiosCleaner.git
+git clone git@github.com:zixij644-elaborate/ApiosCleaner.git
 cd ApiosCleaner
 cargo build --release
 # 二进制文件位于 ./target/release/apios
@@ -66,13 +66,13 @@ cargo build --release
 也可以用 cargo 直接安装 CLI：
 
 ```sh
-cargo install --git git@github.com:Zniece/ApiosCleaner.git --locked
+cargo install --git git@github.com:zixij644-elaborate/ApiosCleaner.git --locked
 ```
 
 **Windows**：从最新的
-[Release](https://github.com/Zniece/ApiosCleaner/releases/latest)
+[Release](https://github.com/zixij644-elaborate/ApiosCleaner/releases/latest)
 下载 `apios-windows-x86_64`（zip 包含 `apios.exe`）——或从
-[CI 运行](https://github.com/Zniece/ApiosCleaner/actions) → Artifacts
+[CI 运行](https://github.com/zixij644-elaborate/ApiosCleaner/actions) → Artifacts
 获取最新构建——或在 Windows 本机上执行 `cargo install`。无需管理员权限；
 Recycle Bin API 按用户运行。
 
@@ -181,7 +181,5 @@ apios pkg winget uninstall 7-Zip
 
 ## 许可证
 
-初始代码库源自 alienator88 的 [Pearcleaner](https://github.com/alienator88/Pearcleaner)，
-基于 **Apache License 2.0 with the Commons Clause License Condition v1.0** 许可。
-本项目以**相同许可证**分发，包括禁止销售本软件的限制。完整许可文本（Commons Clause 条款和
-Apache License 2.0）请见 [LICENSE](LICENSE)。
+[MIT License](LICENSE)。初始代码库源自 alienator88 的 [Pearcleaner](https://github.com/alienator88/Pearcleaner)
+（原基于 Apache 2.0 with Commons Clause）；本项目已获原作者授权，重新以 MIT 许可分发。

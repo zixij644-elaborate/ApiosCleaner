@@ -5,10 +5,10 @@ members = ["crates/apios-core", "crates/apios"]
 [workspace.package]
 version = "0.2.2"
 edition = "2021"
-license = "Apache-2.0"
-repository = "https://github.com/Zniece/ApiosCleaner"
+license = "MIT"
+repository = "https://github.com/zixij644-elaborate/ApiosCleaner"
 readme = "README.md"
-homepage = "https://github.com/Zniece/ApiosCleaner"
+homepage = "https://github.com/zixij644-elaborate/ApiosCleaner"
 
 [profile.release]
 lto = true

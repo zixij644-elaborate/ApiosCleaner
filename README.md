@@ -46,7 +46,7 @@ independently — see [Beyond a straight port](CHANGELOG.md#beyond-a-straight-po
 ## Install
 
 **Pre-built binary** (recommended) — download the latest release from
-[GitHub Releases](https://github.com/Zniece/ApiosCleaner/releases/latest),
+[GitHub Releases](https://github.com/zixij644-elaborate/ApiosCleaner/releases/latest),
 then unzip and add it to your PATH:
 
 ```sh
@@ -63,7 +63,7 @@ unzip apios-macos-arm64.zip -d ~/bin        # or apios-macos-x86_64.zip
 Or build from source (macOS):
 
 ```sh
-git clone git@github.com:Zniece/ApiosCleaner.git
+git clone git@github.com:zixij644-elaborate/ApiosCleaner.git
 cd ApiosCleaner
 cargo build --release
 # binary at ./target/release/apios
@@ -72,12 +72,12 @@ cargo build --release
 Or install the CLI directly with cargo:
 
 ```sh
-cargo install --git git@github.com:Zniece/ApiosCleaner.git --locked
+cargo install --git git@github.com:zixij644-elaborate/ApiosCleaner.git --locked
 ```
 
 **Windows**: download `apios-windows-x86_64` (a zip with `apios.exe`) from the
-latest [release](https://github.com/Zniece/ApiosCleaner/releases/latest) — or
-the latest [CI run](https://github.com/Zniece/ApiosCleaner/actions) →
+latest [release](https://github.com/zixij644-elaborate/ApiosCleaner/releases/latest) — or
+the latest [CI run](https://github.com/zixij644-elaborate/ApiosCleaner/actions) →
 Artifacts for a fresh build — or `cargo install` on the machine itself.
 Requires no admin rights; the Recycle Bin API works per-user.
 
@@ -193,8 +193,6 @@ correctly in legacy cmd/PowerShell consoles.
 
 ## License
 
-The initial codebase was derived from [Pearcleaner](https://github.com/alienator88/Pearcleaner)
-by alienator88, licensed under the **Apache License 2.0 with the Commons Clause
-License Condition v1.0**. This project is distributed under the **same
-license**, including the prohibition on selling the Software. The full license
-text (Commons Clause condition and Apache License 2.0) is in [LICENSE](LICENSE).
+[MIT License](LICENSE). The initial codebase was derived from [Pearcleaner](https://github.com/alienator88/Pearcleaner)
+by alienator88 (originally Apache 2.0 with Commons Clause); this project has
+been re-licensed to MIT with the original author's authorization.

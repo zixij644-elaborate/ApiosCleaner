@@ -9,7 +9,7 @@
 ## 起步
 
 ```sh
-git clone git@github.com:Zniece/ApiosCleaner.git
+git clone git@github.com:zixij644-elaborate/ApiosCleaner.git
 cd ApiosCleaner
 cargo build
 cargo test --all
