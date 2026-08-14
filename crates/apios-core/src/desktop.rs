@@ -6,7 +6,8 @@
 //!
 //! 有效性规则（对齐常见实现）：
 //! - 仅 `Type=Application` 的桌面项算应用（Link/Directory 是目录入口/快捷方式）
-//! - `NoDisplay=true` 的桌面项不出现在应用菜单 → 不产出
+//! - `NoDisplay=true` / `Hidden=true` 是"菜单显示"语义——应用仍**已安装**，
+//!   解析产出（不产出会导致其数据被孤儿扫描误判）
 //! - Name 与 Exec 缺失 → 无效
 //! - 本地化键（`Name[zh_CN]`）按主键（`Name`）处理，不做语言选择
 
@@ -19,8 +20,9 @@ pub struct DesktopEntry {
     pub no_display: bool,
 }
 
-/// 解析 [Desktop Entry] 段；无效（非 Application / NoDisplay / 缺 Name 或 Exec）→ None。
-/// 段外的内容（[Desktop Action x]、[KDE Desktop Entry] 等）一律忽略。
+/// 解析 [Desktop Entry] 段；无效（非 Application / 缺 Name 或 Exec）→ None。
+/// NoDisplay/Hidden 不拒绝（已安装应用需产出）。段外的内容
+/// （[Desktop Action x]、[KDE Desktop Entry] 等）一律忽略。
 pub fn parse_desktop(content: &str) -> Option<DesktopEntry> {
     let mut name: Option<String> = None;
     let mut exec: Option<String> = None;
@@ -44,12 +46,12 @@ pub fn parse_desktop(content: &str) -> Option<DesktopEntry> {
             "Name" => name = Some(value.trim().to_string()),
             "Exec" => exec = Some(value.trim().to_string()),
             "Icon" => icon = Some(value.trim().to_string()),
+            // NoDisplay/Hidden 只是"菜单显示"语义 —— 应用**已安装**，必须产出
+            // （否则其数据被孤儿扫描误判；2026-08-15 审查 P1-12）
             "NoDisplay" if value.trim() == "true" => no_display = true,
+            "Hidden" if value.trim() == "true" => no_display = true,
             _ => {}
         }
-    }
-    if no_display {
-        return None;
     }
     Some(DesktopEntry {
         name: name?,
@@ -130,10 +132,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_no_display_rejected() {
+    fn test_parse_no_display_produced() {
+        // NoDisplay/Hidden 是"菜单显示"语义——应用已安装，必须产出
+        // （否则其数据被孤儿扫描误判，2026-08-15 审查 P1-12）
         let content =
-            "[Desktop Entry]\nType=Application\nName=Hidden\nExec=/usr/bin/x\nNoDisplay=true\n";
-        assert!(parse_desktop(content).is_none());
+            "[Desktop Entry]\nType=Application\nName=HiddenApp\nExec=/usr/bin/x\nNoDisplay=true\n";
+        let entry = parse_desktop(content).unwrap();
+        assert_eq!(entry.name, "HiddenApp");
+        assert!(entry.no_display);
     }
 
     #[test]

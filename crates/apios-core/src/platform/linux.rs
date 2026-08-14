@@ -196,8 +196,8 @@ impl Trash for LinuxAdapter {
                 });
                 continue;
             };
-            // files/ 目标（同名冲突加序号）—— info 名与之一致
-            let target = xdg::unique_name(&files_dir, &name);
+            // files/ 目标（files 与 info 双侧冲突检查，P1-10）—— info 名与之一致
+            let target = xdg::unique_name_pair(&files_dir, &info_dir, &name);
             let Some(target_name) = target.file_name().map(|n| n.to_string_lossy().into_owned())
             else {
                 failed.push(DeleteFailure {
@@ -206,11 +206,20 @@ impl Trash for LinuxAdapter {
                 });
                 continue;
             };
-            // 移动（跨卷 EXDEV 在此失败，挂载点 TODO 处理）
+            // 移动（跨卷 EXDEV → 文件 copy+remove 回退，对齐 POSIX 归档实现；
+            // 挂载点 `.Trash-$uid` 选择仍留 TODO，2026-08-15 审查 P1-11）
             if let Err(e) = std::fs::rename(url, &target) {
-                eprintln!("apios: move to trash failed for {}: {e}", url.display());
-                failed.push(DeleteFailure::from_io_error(url.clone(), &e));
-                continue;
+                if e.raw_os_error() == Some(libc::EXDEV)
+                    && url.is_file()
+                    && std::fs::copy(url, &target).is_ok()
+                    && std::fs::remove_file(url).is_ok()
+                {
+                    // copy 回退成功（非原子，中断可能留副本——同核心实现语义）
+                } else {
+                    eprintln!("apios: move to trash failed for {}: {e}", url.display());
+                    failed.push(DeleteFailure::from_io_error(url.clone(), &e));
+                    continue;
+                }
             }
             // 写 trashinfo（失败 → 回滚，避免无法恢复的孤儿条目）
             let info_path = info_dir.join(xdg::info_file_name(&target_name));
@@ -233,7 +242,10 @@ impl Trash for LinuxAdapter {
             });
         }
         DeleteResult {
-            success: failed.is_empty(),
+            // 对齐核心 move_to_trash_dir / Windows 的语义：全 blocked 或空列表
+            // 时 success=false，CLI 走 "Nothing to delete" 分支而非误报已删除
+            // （2026-08-15 审查 P1-13）
+            success: failed.is_empty() && !moved.is_empty(),
             bundle_folder: files_dir,
             moved,
             blocked,
@@ -255,28 +267,48 @@ impl SpotlightIndex for LinuxAdapter {
 }
 
 impl ProcessControl for LinuxAdapter {
-    /// 按应用可执行名终止：`pgrep -f <可执行名>` → `kill -TERM`。
-    /// -f 全命令行匹配（绕过进程名 15 字符截断）；AppInfo.path 是 .desktop 路径，
-    /// file_stem（如 "firefox"）通常与二进制同名。无匹配（pgrep exit 1）→ 0。
+    /// 按应用可执行名终止：`ps` 枚举 + 可执行名匹配 → `kill -TERM`。
+    /// AppInfo.path 是 .desktop 路径，file_stem（如 "firefox"）通常与二进制同名。
+    ///
+    /// 实现说明（2026-08-15 审查 P1-6，替代 pgrep -f）：
+    /// - pgrep -f 匹配**整条命令行**——apios 自身的命令行含应用名，删除前会
+    ///   把 CLI 自己 kill 掉（每次卸载都触发）
+    /// - stem 含正则元字符（C++、7-Zip）时 pgrep 静默失效
+    /// - 误杀所有命令行参数含该词的无关进程
+    ///
+    /// `ps -eo pid=,comm=` 只匹配可执行名（basename），不匹配参数；显式排除
+    /// 自身 PID。comm 受 15 字符截断（TASK_COMM_LEN），双向前缀匹配覆盖截断
+    /// 场景；漏杀（脚本类 python3）是安全方向。无匹配 → 0。
     fn kill_running_app(&self, app: &AppInfo) -> u32 {
         let Some(name) = app.path.file_stem().and_then(|n| n.to_str()) else {
             return 0;
         };
-        let Ok(out) = cmd_util::run_capture(Path::new("pgrep"), &["-f", name], &[]) else {
+        let Ok(out) = cmd_util::run_capture(Path::new("ps"), &["-eo", "pid=,comm="], &[]) else {
             return 0;
         };
         if !out.status.success() {
             return 0;
         }
-        let pids: Vec<&str> = out
-            .stdout
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect();
+        let self_pid = std::process::id();
+        let mut pids: Vec<String> = Vec::new();
+        for line in out.stdout.lines() {
+            let mut it = line.split_whitespace();
+            let (Some(pid), Some(comm)) = (it.next(), it.next()) else {
+                continue;
+            };
+            let Ok(pid): Result<u32, _> = pid.parse() else {
+                continue;
+            };
+            if pid == self_pid {
+                continue;
+            }
+            if comm == name || comm.starts_with(name) || name.starts_with(comm) {
+                pids.push(pid.to_string());
+            }
+        }
         let mut killed = 0;
         for pid in pids {
-            if cmd_util::run_capture(Path::new("kill"), &["-TERM", pid], &[]).is_ok() {
+            if cmd_util::run_capture(Path::new("kill"), &["-TERM", &pid], &[]).is_ok() {
                 killed += 1;
             }
         }
@@ -382,6 +414,22 @@ impl AppDiscovery for LinuxAdapter {
                         continue;
                     };
                     if let Some(de) = desktop::parse_desktop(&content) {
+                        // 空 Name 不产出（P1-12）
+                        if de.name.is_empty() {
+                            continue;
+                        }
+                        // 同名 .desktop 去重：用户目录（apps_paths 靠前）优先于
+                        // 系统目录（规范语义：用户覆盖系统），P1-12
+                        let file_name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        if apps.iter().any(|a| {
+                            a.path.file_name().map(|n| n.to_string_lossy().into_owned())
+                                == Some(file_name.clone())
+                        }) {
+                            continue;
+                        }
                         apps.push(AppInfo {
                             path,
                             bundle_identifier: String::new(),
@@ -569,6 +617,8 @@ mod tests {
         let firefox = apps.iter().find(|a| a.path == firefox_path).unwrap();
         assert_eq!(firefox.app_name, "Firefox");
         assert!(firefox.bundle_identifier.is_empty());
-        assert!(!apps.iter().any(|a| a.app_name == "Hidden"));
+        // NoDisplay/Hidden 应用现在**产出**（已安装应用须纳入已装集合，
+        // 孤儿豁免；2026-08-15 审查 P1-12）——断言其被正确发现
+        assert!(apps.iter().any(|a| a.app_name == "Hidden"));
     }
 }

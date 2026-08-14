@@ -121,6 +121,33 @@ pub fn unique_name(dir: &Path, name: &str) -> PathBuf {
     }
 }
 
+/// files/ 与 info/ **双侧**冲突检查的唯一定名（2026-08-15 审查 P1-10）：
+/// 只查 files/ 时，若 info/<name>.trashinfo 已存在而 files 条目缺失（上次
+/// 崩溃残留），新写入会覆盖旧 trashinfo，丢失旧条目的恢复元数据。
+/// 注意：exists() 检查与后续 rename 之间非原子（TOCTOU）——并发两个实例
+/// 移入同名文件时后到者可能覆盖；单进程内安全，文档化勿并发。
+pub fn unique_name_pair(files: &Path, info: &Path, name: &str) -> PathBuf {
+    let taken = |candidate: &std::path::Path| -> bool {
+        candidate.exists()
+            || candidate
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| info.join(info_file_name(n)).exists())
+                .unwrap_or(false)
+    };
+    if !taken(&files.join(name)) {
+        return files.join(name);
+    }
+    let mut i = 1u32;
+    loop {
+        let candidate = files.join(format!("{name}.{i}"));
+        if !taken(&candidate) {
+            return candidate;
+        }
+        i += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
