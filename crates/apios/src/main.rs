@@ -505,7 +505,14 @@ fn arg_is_path(arg: &str) -> bool {
 fn find_app_by_name(name: &str, folders: &[String]) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     {
-        let exact = format!("{name}.app");
+        // name 已带 .app 后缀（`apios list Firefox.app`）→ 不再追加，
+        // 否则拼成 "Firefox.app.app" 永远找不到（2026-08-15 审查 P1-16）
+        let has_suffix = name.to_ascii_lowercase().ends_with(".app");
+        let exact = if has_suffix {
+            name.to_string()
+        } else {
+            format!("{name}.app")
+        };
         for folder in folders {
             let candidate = Path::new(folder).join(&exact);
             if candidate.exists() {
@@ -844,6 +851,23 @@ fn filter_except(paths: Vec<PathBuf>, except: &[String]) -> (Vec<PathBuf>, usize
     (kept, skipped)
 }
 
+/// `--except` 零命中警告（2026-08-15 审查 P1-19）：用户明确想保留的路径若
+/// 未匹配到删除列表中的任何条目（大小写/相对路径/`..` 等导致），静默失效
+/// 可能让用户以为已排除实际没有——响亮提示。
+fn warn_unmatched_except(paths: &[PathBuf], except: &[String]) {
+    if except.is_empty() {
+        return;
+    }
+    let home = apios_core::platform::adapter().home();
+    for e in except {
+        let ep = PathBuf::from(expand_home(e, &home));
+        let matched = paths.iter().any(|p| p == &ep || p.starts_with(&ep));
+        if !matched {
+            eprintln!("Warning: --except \"{e}\" did not match any file in the delete list.");
+        }
+    }
+}
+
 fn find_app_paths(app: &AppInfo) -> Vec<PathBuf> {
     let locations = Locations::new();
     let mut finder = AppPathFinder::new(app, &locations, Sensitivity::Strict);
@@ -870,6 +894,7 @@ fn cmd_uninstall(cli: &Cli, arg: &str, except: &[String]) {
     if skipped > 0 {
         println!("Skipped {skipped} file(s) (--except).");
     }
+    warn_unmatched_except(&found, except);
 
     // 删除前预防性提示（P0）：沙盒容器与 SIP 系统路径在 macOS 上用户级删除
     // 必然失败 —— 先告知，避免删除后才发现。不阻断流程（失败由分类报告兜底）。
@@ -942,8 +967,18 @@ fn cmd_tmp_clean(cli: &Cli, older_than: u64) {
         roots.push(PathBuf::from("/tmp"));
         roots.push(PathBuf::from("/var/tmp"));
     }
-    roots.sort();
-    roots.dedup(); // Linux 的 user_temp_dir 可能即 /tmp
+    // 符号链接别名去重（macOS /tmp→/private/tmp、/var/tmp→/private/var/tmp，
+    // Linux user_temp_dir 可能即 /tmp）：canonicalize 后比较，避免同一目录
+    // 被扫两次 → 重复删除/NotFound 误报（2026-08-15 审查 P1-18）。
+    // canonicalize 失败（目录不存在）保留原路径（scan_tmp 会跳过）。
+    let mut canon_roots: Vec<PathBuf> = Vec::new();
+    for r in roots {
+        let key = std::fs::canonicalize(&r).unwrap_or(r);
+        if !canon_roots.contains(&key) {
+            canon_roots.push(key);
+        }
+    }
+    let roots = canon_roots;
 
     let older = std::time::Duration::from_secs(older_than * 86400);
     let found = apios_core::clean_tmp::scan_tmp(&roots, older);
@@ -1142,7 +1177,9 @@ fn cmd_pkg_uninstall(cli: &Cli, pm: &dyn PackageManager, name: &str, zap: bool) 
                 exit(1);
             }
         };
-        if list.iter().any(|p| p.name == name) {
+        // 大小写不敏感匹配（winget 包名原始大小写，用户输入可能不同，
+        // 2026-08-15 审查 P1-20；brew/apt 亦无害）
+        if list.iter().any(|p| p.name.eq_ignore_ascii_case(name)) {
             found_kind = Some(kind);
             break;
         }
@@ -1301,8 +1338,15 @@ fn truncated(path: &Path, max: usize) -> String {
 
 fn cmd_plugins(cli: &Cli, category: Option<&str>, clean: Option<&str>) {
     let categories = apios_core::platform::adapter().plugin_categories();
-    // --clean 有值 → 删除模式（目标 = clean 值）；否则列出（目标 = category 值）
-    let target = resolve_plugin_categories(&categories, clean.or(category));
+    // --clean 有值 → 删除模式（目标 = clean 值）；否则列出（目标 = category 值）。
+    // `plugins audio --clean`（clean 默认 "all"）→ 以显式 category 为准，避免
+    // 静默扩大到全部分类（2026-08-15 审查 P1-17）。
+    let target = if clean == Some("all") && category.is_some() {
+        category
+    } else {
+        clean.or(category)
+    };
+    let target = resolve_plugin_categories(&categories, target);
     let grouped = group_by_category(scan_plugins(&target));
     let count: usize = grouped.iter().map(|(_, list)| list.len()).sum();
     let total: u64 = grouped
@@ -1773,6 +1817,7 @@ fn cmd_clean_orphan(cli: &Cli, filter: &[String], except: &[String]) {
     if skipped > 0 {
         println!("Skipped {skipped} orphan(s) (--except).");
     }
+    warn_unmatched_except(&found, except);
 
     if found.is_empty() {
         if filter.is_empty() {
