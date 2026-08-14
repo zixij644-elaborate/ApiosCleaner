@@ -81,7 +81,7 @@ jobs:
         if: github.event_name == 'push'
         run: |
           rustup target add aarch64-unknown-linux-musl
-          rustup component add rust-lld
+          # rustc 内置 lld —— 无需独立 rust-lld 组件（Linux 工具链无此组件）
           RUSTFLAGS="-C linker=rust-lld" cargo build --release --target aarch64-unknown-linux-musl --locked
       - name: upload artifact (Linux x86_64)
         if: github.event_name == 'push'
