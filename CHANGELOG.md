@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`orphan` / `clean-orphan` warn when run as root** — `sudo` resets
+  `HOME`/`PATH`, so the package-manager and extension-registry
+  exclusions are lost and the orphan list silently grows with live
+  tooling data (kotlin/dotnet/Parallels/…). A real run showed 7 orphans
+  as a normal user vs 12 under sudo. The commands now print a note
+  explaining the difference and warn against `a` (delete all).
+
 - **`uninstall` warns before deleting protected targets** — sandbox
   containers (`~/Library/Containers/…`) and SIP system paths
   (`/System/…`) cannot be deleted by a user-level CLI on macOS; the

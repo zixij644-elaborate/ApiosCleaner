@@ -1636,6 +1636,20 @@ fn fmt_size(bytes: u64) -> String {
     apios_core::dev_env::fmt_size(bytes)
 }
 
+/// root/sudo 环境警告：孤儿豁免依赖用户环境的 brew 包名集合与扩展注册表
+/// （~/.vscode 等）。sudo 重置 HOME/PATH → 这些豁免失效 → 孤儿列表膨胀且
+/// 含活跃工具数据 —— 全选（'a'）会误删。提示差异并提醒谨慎。
+fn warn_if_root() {
+    #[cfg(unix)]
+    if unsafe { libc::geteuid() == 0 } {
+        eprintln!(
+            "Note: running as root — discovery uses the root environment (HOME/PATH); \
+             package-manager and extension exclusions are reduced, so this orphan list \
+             can differ from a normal user run. Be careful with 'a' (delete all)."
+        );
+    }
+}
+
 fn find_orphans() -> Vec<PathBuf> {
     let locations = Locations::new();
     // 平台化发现：macOS/Linux 内部即旧 walk（行为等价），Windows 走注册表+开始菜单
@@ -1646,6 +1660,7 @@ fn find_orphans() -> Vec<PathBuf> {
 
 fn cmd_orphan(cli: &Cli) {
     let _ = cli;
+    warn_if_root();
     let found = find_orphans();
 
     // 与 clean-orphan 交互列表完全一致的编号格式（含 [sudo] 标注），
@@ -1751,6 +1766,7 @@ fn filter_orphans_by_terms(found: Vec<PathBuf>, filter: &[String]) -> Vec<PathBu
 }
 
 fn cmd_clean_orphan(cli: &Cli, filter: &[String], except: &[String]) {
+    warn_if_root();
     let found = find_orphans();
     let found = filter_orphans_by_terms(found, filter);
     let (found, skipped) = filter_except(found, except);
