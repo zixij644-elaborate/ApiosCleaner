@@ -250,11 +250,10 @@ impl<'a> AppPathFinder<'a> {
         temp.sort();
         let mut filtered: Vec<PathBuf> = Vec::new();
         for url in &temp {
-            let s = url.to_string_lossy();
-            let is_sub = filtered.iter().any(|k| {
-                let ks = k.to_string_lossy();
-                s == ks || s.starts_with(&format!("{ks}/"))
-            });
+            // 组件级子路径判断（PathBuf::starts_with，跨平台分隔符正确——
+            // 之前 format!("{ks}/") 正斜杠在 Windows 恒 false，父目录与其子
+            // 条目同时保留 → 重复删除目标，2026-08-15 审查 P1-3）
+            let is_sub = filtered.iter().any(|k| url == k || url.starts_with(k));
             if !is_sub {
                 filtered.push(url.clone());
             }

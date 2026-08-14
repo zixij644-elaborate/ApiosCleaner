@@ -73,11 +73,12 @@ pub fn get_sorted_apps(paths: &[String]) -> Vec<AppInfo> {
 /// 发现结果）。路径大小写不敏感，同时匹配 exe（DisplayIcon）与安装目录
 /// （InstallLocation）两种形态 —— 任一为对方的路径前缀即命中。
 pub fn find_app_by_path(path: &Path, apps: &[AppInfo]) -> Option<AppInfo> {
-    let target = path.to_string_lossy().to_lowercase();
     apps.iter()
         .find(|a| {
-            let p = a.path.to_string_lossy().to_lowercase();
-            p == target || target.starts_with(&p) || p.starts_with(&target)
+            // 组件级比较（Path::starts_with——Windows 上 OsStr 比较大小写不敏感；
+            // 且带组件边界："7-Zip" 不会前缀命中 "7-ZipPortable"，
+            // 2026-08-15 审查 P1-4）。语义：目标在应用目录之下或等于应用目录。
+            path == a.path || path.starts_with(&a.path) || a.path.starts_with(path)
         })
         .cloned()
 }

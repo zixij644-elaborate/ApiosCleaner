@@ -251,15 +251,20 @@ pub fn move_to_trash_dir(
     let bundle_folder = trash_dir.join(format!("{folder_name}_{timestamp}"));
 
     // 建目录 + 逐文件移动（重名后缀）
-    if std::fs::create_dir_all(&bundle_folder).is_err() {
+    if let Err(e) = std::fs::create_dir_all(&bundle_folder) {
         // 归档目录建不起来 = 整个操作失败（回收站不可用/权限）。此前返回全空
         // 结果会被 main.rs 误判为 "Nothing to delete" 而 exit 0 —— 实际什么都没删。
-        // 分类为 TrashUnavailable，CLI 可针对性提示
+        // 根因细分（2026-08-15 审查 P1-5）：权限不足（可 sudo）→ PermissionDenied，
+        // 其余（磁盘满/路径被占）→ TrashUnavailable。
+        let reason = match e.kind() {
+            std::io::ErrorKind::PermissionDenied => DeleteFailureReason::PermissionDenied,
+            _ => DeleteFailureReason::TrashUnavailable,
+        };
         result.failed = urls
             .iter()
             .map(|p| DeleteFailure {
                 path: p.clone(),
-                reason: DeleteFailureReason::TrashUnavailable,
+                reason: reason.clone(),
             })
             .collect();
         return result;
@@ -343,6 +348,13 @@ pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult
 pub fn restore_files(file_pairs: &[FilePair]) -> bool {
     let mut all_ok = true;
     for pair in file_pairs {
+        // 原位置已有文件（删除后重建的活跃数据）→ 不覆盖，跳过该对
+        // （否则 rename 会把旧副本覆盖到新文件上，新数据静默丢失——
+        // 2026-08-15 审查 P1-1）
+        if pair.original_path.exists() {
+            all_ok = false;
+            continue;
+        }
         if let Some(parent) = pair.original_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }

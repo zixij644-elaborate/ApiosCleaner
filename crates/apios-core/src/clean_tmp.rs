@@ -79,16 +79,44 @@ pub fn scan_tmp(roots: &[PathBuf], older_than: Duration) -> Vec<PathBuf> {
             if is_tmp_excluded(&entry.file_name().to_string_lossy(), is_socket) {
                 continue;
             }
-            // mtime 过滤：条目必须比 cutoff 更旧
-            let Ok(mtime) = meta.modified() else {
+            // mtime 过滤：条目的"活跃时间"必须比 cutoff 更旧。
+            // 目录条目：浅扫一层取最新子项 mtime —— 内容**原地改写**不更新
+            // 目录自身 mtime，只看目录 mtime 会把每天被工具重写的活跃目录
+            // 整目录移走（2026-08-15 审查 P1-2）。一层深度覆盖"工具直接写
+            // /tmp/<dir>/<file>"主场景；更深嵌套的内容改写仍可能漏（文档化）。
+            let Ok(active) = entry_active_time(&path, &meta) else {
                 continue;
             };
-            if mtime < cutoff {
+            if active < cutoff {
                 found.push(path);
             }
         }
     }
     found
+}
+
+/// 条目的"活跃时间"：文件 → 自身 mtime；目录 → max(自身 mtime, 浅扫一层
+/// 子项的最大 mtime)（内容原地改写不更新目录 mtime，需看子项）。
+/// 一层深度为刻意取舍（完整递归成本高；深层嵌套场景文档化限制）。
+fn entry_active_time(
+    path: &std::path::Path,
+    meta: &std::fs::Metadata,
+) -> std::io::Result<std::time::SystemTime> {
+    if !meta.is_dir() {
+        return meta.modified();
+    }
+    let own = meta.modified()?;
+    let mut latest = own;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if let Ok(m) = entry.metadata().and_then(|m| m.modified()) {
+                if m > latest {
+                    latest = m;
+                }
+            }
+        }
+    }
+    Ok(latest)
 }
 
 #[cfg(test)]
@@ -146,6 +174,29 @@ mod tests {
         let found = scan_tmp(&[tmp.path().to_path_buf()], Duration::from_secs(7 * 86400));
         // 只有改旧的 old-file 入选；fresh 太新、lock 命中白名单
         assert_eq!(found, vec![old]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_scan_tmp_dir_with_fresh_child_not_selected() {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("old-dir");
+        std::fs::create_dir(&dir).unwrap();
+        // 先写新鲜子文件，再把目录 mtime 改旧（内容原地改写场景：
+        // 目录 mtime 不随内容更新，但子文件是新鲜的）
+        std::fs::write(dir.join("fresh.txt"), b"x").unwrap();
+        let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).unwrap();
+        let times = [libc::timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        }; 2];
+        unsafe {
+            libc::utimes(c.as_ptr(), times.as_ptr());
+        }
+
+        let found = scan_tmp(&[tmp.path().to_path_buf()], Duration::from_secs(7 * 86400));
+        assert!(found.is_empty(), "目录含新子文件 → 不应入选: {found:?}");
     }
 
     #[test]

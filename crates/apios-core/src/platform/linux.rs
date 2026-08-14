@@ -141,14 +141,21 @@ impl Trash for LinuxAdapter {
         let mut blocked: Vec<PathBuf> = Vec::new();
         let mut failed: Vec<DeleteFailure> = Vec::new();
         // 首次使用时创建 files/ 与 info/（失败 → 全部 failed，语义同
-        // move_to_trash_dir 的 create_dir_all 失败路径）
-        let trash_unavailable = |urls: &[PathBuf]| -> Vec<DeleteFailure> {
+        // move_to_trash_dir 的 create_dir_all 失败路径；根因细分
+        // PermissionDenied/TrashUnavailable，2026-08-15 审查 P1-5）
+        let failure_all = |urls: &[PathBuf], reason: DeleteFailureReason| -> Vec<DeleteFailure> {
             urls.iter()
                 .map(|p| DeleteFailure {
                     path: p.clone(),
-                    reason: DeleteFailureReason::TrashUnavailable,
+                    reason: reason.clone(),
                 })
                 .collect()
+        };
+        let trash_dir_reason = |e: &std::io::Error| -> DeleteFailureReason {
+            match e.kind() {
+                std::io::ErrorKind::PermissionDenied => DeleteFailureReason::PermissionDenied,
+                _ => DeleteFailureReason::TrashUnavailable,
+            }
         };
         if let Err(e) = std::fs::create_dir_all(&files_dir) {
             eprintln!(
@@ -160,7 +167,7 @@ impl Trash for LinuxAdapter {
                 bundle_folder: files_dir,
                 moved,
                 blocked,
-                failed: trash_unavailable(urls),
+                failed: failure_all(urls, trash_dir_reason(&e)),
             };
         }
         if let Err(e) = std::fs::create_dir_all(&info_dir) {
@@ -173,7 +180,7 @@ impl Trash for LinuxAdapter {
                 bundle_folder: files_dir,
                 moved,
                 blocked,
-                failed: trash_unavailable(urls),
+                failed: failure_all(urls, trash_dir_reason(&e)),
             };
         }
         for url in urls {
