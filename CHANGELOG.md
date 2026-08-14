@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`apios clean-tmp`** — clean system temporary directories that the OS
+  does not clean automatically: `$TMPDIR` + `/tmp` + `/var/tmp` (POSIX) /
+  `%TEMP%` (Windows), user-nominated after AI tooling was observed piling
+  up `/tmp`. Safety: only entries untouched for `--older-than` days
+  (default 7) are considered; protected entries are skipped (X-session
+  runtime files, `systemd-private-*`, macOS `com.apple.*` service dirs —
+  a real run with a 1-day threshold listed 278 system-service entries,
+  now excluded — sockets, `*.lock`); confirmation before anything moves;
+  files go to the Trash. Verified end-to-end on macOS (preview → delete →
+  file gone, archive in ~/.Trash).
+
 - **`apios apps`** — list installed apps found by discovery (read-only):
   macOS `.app` bundles, Windows registry uninstall entries + Start Menu
   `.lnk`, Linux `.desktop` files. The help text states the coverage

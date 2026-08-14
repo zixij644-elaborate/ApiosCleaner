@@ -120,6 +120,12 @@ apios dev-clean
 # Clean one dev environment (e.g. Cargo, Gradle, Xcode), or "all"
 apios dev-clean cargo
 
+# Clean system temporary directories ($TMPDIR + /tmp + /var/tmp / %TEMP%):
+# entries not touched for 7 days (default) — X-session/systemd/com.apple
+# service dirs, sockets and locks are protected
+apios clean-tmp
+apios clean-tmp --older-than 1    # only entries untouched for 1+ days
+
 # Package manager category (Homebrew on macOS): list installed packages
 apios pkg brew list
 

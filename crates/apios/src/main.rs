@@ -11,6 +11,9 @@
 //!                             Enter 取消；受保护项标注 [sudo] 可跳过；
 //!                             --except PATH 先剔除；-y 全删）
 //!   apios dev-clean [env]    列出开发环境缓存；带 <env> 则清理（交互确认）
+//!   apios clean-tmp          清理系统临时目录（$TMPDIR + /tmp + /var/tmp /
+//!                             %TEMP% 中 N 天前未触碰的条目；白名单保护
+//!                             X 会话/systemd/com.apple 服务/socket/锁；默认 7 天）
 //!   apios pkg <pm> <action>  包管理器：卸载包本体 + 依赖处理
 //!                             （macOS: brew；Windows: winget；Linux: apt）
 //!   apios plugins [类别]     列出插件（18 类：音频/偏好面板/QuickLook 等）
@@ -216,6 +219,26 @@ terminal and without -y, the command refuses to run."
         #[arg(long, value_name = "PATH", action = clap::ArgAction::Append)]
         except: Vec<String>,
     },
+    /// Clean temporary directories: system /tmp, /var/tmp and %TEMP%
+    #[command(
+        name = "clean-tmp",
+        long_about = "Clean temporary directories — system /tmp and /var/tmp (macOS/Linux) \
+and %TEMP% (Windows), which the OS does not clean automatically.\n\n\
+Safety:\n  \
+• only entries not touched for --older-than days (default 7) are considered\n  \
+• protected entries are skipped: X-session runtime files (.X11-unix, .X0-lock, …), \
+systemd-private service dirs, sockets and *.lock\n  \
+• you confirm before anything moves; files go to the Trash/Recycle Bin",
+        after_long_help = "EXAMPLES:\n  \
+apios clean-tmp                      # delete tmp entries older than 7 days\n  \
+apios clean-tmp --older-than 1       # delete tmp entries older than 1 day\n  \
+apios clean-tmp -y                   # skip confirmation (scripting)"
+    )]
+    TmpClean {
+        /// Only delete entries not touched for this many days (default 7)
+        #[arg(long, default_value_t = 7)]
+        older_than: u64,
+    },
     /// List dev environment caches (read-only); with <env>, clean it
     #[command(
         long_about = "Inspect and clean dev-environment caches.\n\n\
@@ -416,6 +439,7 @@ fn main() {
         Command::Orphan => cmd_orphan(&cli),
         Command::CleanOrphan { ref except } => cmd_clean_orphan(&cli, except),
         Command::DevClean { ref env } => cmd_dev_clean(&cli, env.as_deref()),
+        Command::TmpClean { older_than } => cmd_tmp_clean(&cli, older_than),
         Command::Pkg { ref pm, ref action } => cmd_pkg(&cli, pm, action),
         Command::Plugins {
             ref category,
@@ -674,6 +698,7 @@ fn confirm(cli: &Cli, prompt: &str) -> bool {
 /// - 沙盒容器（~/Library/Containers、/Library/Containers）：macOS 保护，
 ///   用户级 rename/unlink 均被系统拒绝 → 删除必然失败，先告知
 /// - SIP 系统路径（/System/…）：受 SIP 保护 → 同样必然失败
+///
 /// 不阻断（删除失败由分类报告 report_failures 兜底）。
 fn warn_about_protected_targets(app: &AppInfo, found: &[PathBuf]) {
     let container_count = found
@@ -890,6 +915,67 @@ fn dir_contents(dir: &Path) -> Vec<PathBuf> {
         .flatten() // Result<DirEntry> → DirEntry（条目错误则跳过）
         .map(|e| e.path())
         .collect()
+}
+
+/// `apios clean-tmp`：清理系统临时目录（/tmp、/var/tmp、%TEMP%）中超过
+/// N 天未触碰的条目（白名单保护 X 会话/systemd/socket/锁）。
+fn cmd_tmp_clean(cli: &Cli, older_than: u64) {
+    let adapter = apios_core::platform::adapter();
+    // 三根覆盖（POSIX）：$TMPDIR（per-user，macOS 为 /var/folders/.../T）、
+    // /tmp（AI 工具等写入的主要位置）、/var/tmp（系统级）。Windows 只有 %TEMP%。
+    let mut roots = vec![PathBuf::from(adapter.user_temp_dir())];
+    #[cfg(unix)]
+    {
+        roots.push(PathBuf::from("/tmp"));
+        roots.push(PathBuf::from("/var/tmp"));
+    }
+    roots.sort();
+    roots.dedup(); // Linux 的 user_temp_dir 可能即 /tmp
+
+    let older = std::time::Duration::from_secs(older_than * 86400);
+    let found = apios_core::clean_tmp::scan_tmp(&roots, older);
+    if found.is_empty() {
+        println!("No temporary files older than {older_than} day(s).");
+        return;
+    }
+
+    check_protected(
+        &found,
+        &format!("apios clean-tmp --older-than {older_than}"),
+    );
+
+    println!(
+        "{} temporary file(s) older than {older_than} day(s) will be moved to {}:",
+        found.len(),
+        trash_label()
+    );
+    for p in &found {
+        println!("  {}", p.display());
+    }
+    if !confirm(cli, &format!("Delete {} file(s)? ", found.len())) {
+        println!("Aborted — nothing was deleted.");
+        return;
+    }
+
+    let result = delete_files(&found, Some("Temp"));
+    if result.success {
+        println!(
+            "\n{}",
+            deleted_message(result.moved.len(), &result.bundle_folder)
+        );
+        if !result.failed.is_empty() {
+            report_failures(&result.failed);
+        }
+        exit(0);
+    } else if result.moved.is_empty() && result.failed.is_empty() {
+        report_blocked(&result.blocked);
+        println!("Nothing to delete.");
+        exit(0);
+    } else {
+        eprintln!();
+        report_failures(&result.failed);
+        exit(1);
+    }
 }
 
 fn cmd_dev_clean(cli: &Cli, env: Option<&str>) {

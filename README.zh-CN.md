@@ -111,6 +111,12 @@ apios dev-clean
 # 清理某个开发环境（如 Cargo、Gradle、Xcode），或 "all"
 apios dev-clean cargo
 
+# 清理系统临时目录（$TMPDIR + /tmp + /var/tmp / %TEMP%）：
+# 只删 7 天（默认）前未触碰的条目——X 会话/systemd/com.apple 服务目录、
+# socket 和锁文件受保护
+apios clean-tmp
+apios clean-tmp --older-than 1    # 只删 1 天前未触碰的条目
+
 # 包管理器（macOS 上为 Homebrew）：列出已安装的包
 apios pkg brew list
 
