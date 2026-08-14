@@ -670,6 +670,36 @@ fn confirm(cli: &Cli, prompt: &str) -> bool {
 
 // ---------- 受保护文件 ----------
 
+/// 删除前预防性提示（P0，macOS 场景；其他平台路径不匹配，无害）：
+/// - 沙盒容器（~/Library/Containers、/Library/Containers）：macOS 保护，
+///   用户级 rename/unlink 均被系统拒绝 → 删除必然失败，先告知
+/// - SIP 系统路径（/System/…）：受 SIP 保护 → 同样必然失败
+/// 不阻断（删除失败由分类报告 report_failures 兜底）。
+fn warn_about_protected_targets(app: &AppInfo, found: &[PathBuf]) {
+    let container_count = found
+        .iter()
+        .filter(|p| p.to_string_lossy().contains("/Library/Containers/"))
+        .count();
+    if container_count > 0 {
+        println!(
+            "Note: {container_count} sandbox container(s) — macOS protects these; \
+             the CLI cannot delete them (they may survive the uninstall)."
+        );
+    }
+    let system_count = found.iter().filter(|p| p.starts_with("/System/")).count()
+        + if app.path.starts_with("/System/") {
+            1
+        } else {
+            0
+        };
+    if system_count > 0 {
+        println!(
+            "Note: {system_count} system path(s) under /System/ — protected by SIP; \
+             deletion will fail."
+        );
+    }
+}
+
 /// 失败报告（P0 重构）：分类输出 + sudo 指引，替代笼统 "failed to delete N"。
 /// 分类参照 BleachBit 错误分类思路（仅思想层）。
 fn report_failures(failed: &[DeleteFailure]) {
@@ -802,6 +832,10 @@ fn cmd_uninstall(cli: &Cli, arg: &str, except: &[String]) {
     if skipped > 0 {
         println!("Skipped {skipped} file(s) (--except).");
     }
+
+    // 删除前预防性提示（P0）：沙盒容器与 SIP 系统路径在 macOS 上用户级删除
+    // 必然失败 —— 先告知，避免删除后才发现。不阻断流程（失败由分类报告兜底）。
+    warn_about_protected_targets(&app, &found);
 
     check_protected(&found, &format!("apios uninstall {}", arg));
 

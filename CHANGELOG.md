@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`uninstall` warns before deleting protected targets** — sandbox
+  containers (`~/Library/Containers/…`) and SIP system paths
+  (`/System/…`) cannot be deleted by a user-level CLI on macOS; the
+  command now says so up front (containers may survive the uninstall)
+  instead of failing silently afterwards. The per-file failure report
+  still backs this up.
+
 - **Orphan-scan accuracy: the installed set now includes package
   managers, extension hosts and system components** — previously only
   `.app` bundles were "installed", so active tooling data was reported
