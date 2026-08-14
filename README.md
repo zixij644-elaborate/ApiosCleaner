@@ -112,7 +112,9 @@ apios orphan
 # files are moved, so deliberate leftovers (a game's save folder, …) can be kept.
 # Protected entries (root-owned) are marked [sudo] and can be skipped — no sudo
 # needed for the rest. -y deletes everything without prompting (scripting).
+# With NAME terms, only matching orphans are considered (scripted selective).
 apios clean-orphan
+apios clean-orphan pear            # only orphans whose path contains "pear"
 
 # List dev environment cache sizes (read-only)
 apios dev-clean

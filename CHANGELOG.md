@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clean-orphan <NAME>` term filtering** — scripted selective deletion:
+  one or more NAME arguments keep only orphans whose path contains any
+  term (case-insensitive); the same confirmation flow then applies.
+  Complement to the interactive numbered selection and `--except`.
+
 - **`apios clean-tmp`** — clean system temporary directories that the OS
   does not clean automatically: `$TMPDIR` + `/tmp` + `/var/tmp` (POSIX) /
   `%TEMP%` (Windows), user-nominated after AI tooling was observed piling

@@ -8,8 +8,8 @@
 //!   apios orphan             列出孤儿文件（只读；编号与 clean-orphan 一致，
 //!                             受保护条目标注 [sudo]）
 //!   apios clean-orphan       删除孤儿文件（编号交互选择：1,3-5 范围 / a 全选 /
-//!                             Enter 取消；受保护项标注 [sudo] 可跳过；
-//!                             --except PATH 先剔除；-y 全删）
+//!                             Enter 取消；受保护项标注 [sudo] 可跳过；可带 NAME
+//!                             过滤词只处理路径匹配的孤儿；--except PATH 先剔除；-y 全删）
 //!   apios dev-clean [env]    列出开发环境缓存；带 <env> 则清理（交互确认）
 //!   apios clean-tmp          清理系统临时目录（$TMPDIR + /tmp + /var/tmp /
 //!                             %TEMP% 中 N 天前未触碰的条目；白名单保护
@@ -208,14 +208,24 @@ skipped — no sudo is needed for the rest. Run `apios orphan` first for the sam
 numbered list.\n\n\
 Same safety model as uninstall: files move to the Trash/Recycle Bin, never permanent; \
 critical system paths are protected.\n\n\
+With terms (one or more NAME arguments), only orphans whose path contains any term \
+are considered — scripted selective deletion; then the same flow applies.\n\n\
 --except PATH (repeatable) drops matching entries before the list is shown.\n\n\
 With -y, everything is deleted without prompting (scripting). Without an interactive \
-terminal and without -y, the command refuses to run."
+terminal and without -y, the command refuses to run.",
+        after_long_help = "EXAMPLES:\n  \
+apios clean-orphan                  # interactive numbered selection\n  \
+apios clean-orphan pear            # only orphans whose path contains \"pear\"\n  \
+apios clean-orphan pear -y          # ...and delete them without prompting"
     )]
     CleanOrphan {
+        /// Only consider orphans whose path contains this term (case-insensitive;
+        /// repeatable — any term matches). Without terms, the full list is used.
+        #[arg(value_name = "NAME")]
+        filter: Vec<String>,
         /// Skip orphan paths that match — exact path, or everything under this
-        /// directory. Repeatable; applies before interactive selection, so skipped
-        /// entries never appear in the numbered list.
+        /// directory. Repeatable; applies after term filtering, before interactive
+        /// selection, so skipped entries never appear in the numbered list.
         #[arg(long, value_name = "PATH", action = clap::ArgAction::Append)]
         except: Vec<String>,
     },
@@ -437,7 +447,10 @@ fn main() {
             ref except,
         } => cmd_uninstall(&cli, app, except),
         Command::Orphan => cmd_orphan(&cli),
-        Command::CleanOrphan { ref except } => cmd_clean_orphan(&cli, except),
+        Command::CleanOrphan {
+            ref filter,
+            ref except,
+        } => cmd_clean_orphan(&cli, filter, except),
         Command::DevClean { ref env } => cmd_dev_clean(&cli, env.as_deref()),
         Command::TmpClean { older_than } => cmd_tmp_clean(&cli, older_than),
         Command::Pkg { ref pm, ref action } => cmd_pkg(&cli, pm, action),
@@ -1722,15 +1735,35 @@ fn select_orphans(cli: &Cli, found: &[PathBuf]) -> Vec<PathBuf> {
     }
 }
 
-fn cmd_clean_orphan(cli: &Cli, except: &[String]) {
+/// 孤儿按名称过滤（脚本化选择性删除）：只保留路径含任一过滤词的孤儿。
+/// 大小写不敏感；无过滤词 → 原样返回。
+fn filter_orphans_by_terms(found: Vec<PathBuf>, filter: &[String]) -> Vec<PathBuf> {
+    if filter.is_empty() {
+        return found;
+    }
+    found
+        .into_iter()
+        .filter(|p| {
+            let s = p.to_string_lossy().to_lowercase();
+            filter.iter().any(|f| s.contains(&f.to_lowercase()))
+        })
+        .collect()
+}
+
+fn cmd_clean_orphan(cli: &Cli, filter: &[String], except: &[String]) {
     let found = find_orphans();
+    let found = filter_orphans_by_terms(found, filter);
     let (found, skipped) = filter_except(found, except);
     if skipped > 0 {
         println!("Skipped {skipped} orphan(s) (--except).");
     }
 
     if found.is_empty() {
-        println!("No orphaned files found.");
+        if filter.is_empty() {
+            println!("No orphaned files found.");
+        } else {
+            println!("No orphaned files match \"{}\".", filter.join("\", \""));
+        }
         return;
     }
 
@@ -1901,5 +1934,32 @@ mod tests {
         let (kept, skipped) = filter_except(paths, &["/a".to_string(), "/c".to_string()]);
         assert_eq!(kept, vec![PathBuf::from("/b")]);
         assert_eq!(skipped, 2);
+    }
+
+    #[test]
+    fn test_filter_orphans_by_terms() {
+        let paths = vec![
+            PathBuf::from("/Library/Preferences/pear.plist"),
+            PathBuf::from("/Library/Logs/mole"),
+            PathBuf::from("/Library/HTTPStorages/pear"),
+        ];
+        // 无过滤词 → 原样
+        assert_eq!(filter_orphans_by_terms(paths.clone(), &[]), paths);
+        // 单词（大小写不敏感）
+        let matched = filter_orphans_by_terms(paths.clone(), &["PEAR".to_string()]);
+        assert_eq!(
+            matched,
+            vec![
+                PathBuf::from("/Library/Preferences/pear.plist"),
+                PathBuf::from("/Library/HTTPStorages/pear"),
+            ]
+        );
+        // 多词：任一匹配
+        let matched = filter_orphans_by_terms(paths, &["mole".to_string(), "pear".to_string()]);
+        assert_eq!(matched.len(), 3);
+        // 无匹配 → 空
+        assert!(
+            filter_orphans_by_terms(vec![PathBuf::from("/x/y")], &["zzz".to_string()]).is_empty()
+        );
     }
 }
