@@ -10,6 +10,9 @@ env:
 
 jobs:
   # 质量门禁：fmt / clippy / test（macOS 主平台）
+  # push 到 main 时额外产出 macOS 双架构 release 二进制（arm64 + x86_64，
+  # 各一个单架构 zip —— 发布物无死重切片，也不可被 lipo 瘦身；替代手动
+  # lipo 合并流程，2026-08-15 用户决策）
   quality:
     runs-on: macos-latest
     steps:
@@ -17,6 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - name: fmt
         run: cargo fmt --all --check
@@ -24,11 +28,38 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: test
         run: cargo test --all
+      - name: build (release, arm64)
+        if: github.event_name == 'push'
+        run: cargo build --release --target aarch64-apple-darwin --locked
+      - name: build (release, x86_64)
+        if: github.event_name == 'push'
+        run: cargo build --release --target x86_64-apple-darwin --locked
+      - name: package macOS zips
+        if: github.event_name == 'push'
+        run: |
+          mkdir -p dist
+          zip -j dist/apios-macos-arm64.zip target/aarch64-apple-darwin/release/apios
+          zip -j dist/apios-macos-x86_64.zip target/x86_64-apple-darwin/release/apios
+      - name: upload artifact (macOS arm64)
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apios-macos-arm64
+          path: dist/apios-macos-arm64.zip
+          if-no-files-found: error
+      - name: upload artifact (macOS x86_64)
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apios-macos-x86_64
+          path: dist/apios-macos-x86_64.zip
+          if-no-files-found: error
 
   # Linux 原生测试：apt 解析 / XDG trash / .desktop 发现 / dev-env 表的真实运行。
   # cross-check 只编译不运行 —— Linux 逻辑必须 native 验证（Windows job 不跑
-  # clippy 曾丢代码的教训）。push 到 main 时额外产出 release 二进制 artifact，
-  # 供 Kali VM 等真机走查直接下载。
+  # clippy 曾丢代码的教训）。push 到 main 时额外产出 release 二进制 artifact：
+  # x86_64（gnu 原生）+ aarch64（musl 静态交叉 —— 纯 Rust 无 C 依赖，
+  # rust-lld 静态链接，Kali 等 arm64 设备免 VM 内编译；2026-08-15 用户决策）。
   linux:
     runs-on: ubuntu-latest
     steps:
@@ -43,15 +74,28 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: test (Linux native)
         run: cargo test --all
-      - name: build (release)
+      - name: build (release, x86_64)
         if: github.event_name == 'push'
         run: cargo build --release --locked
+      - name: build (release, aarch64 musl)
+        if: github.event_name == 'push'
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          rustup component add rust-lld
+          RUSTFLAGS="-C linker=rust-lld" cargo build --release --target aarch64-unknown-linux-musl --locked
       - name: upload artifact (Linux x86_64)
         if: github.event_name == 'push'
         uses: actions/upload-artifact@v4
         with:
           name: apios-linux-x86_64
           path: target/release/apios
+          if-no-files-found: error
+      - name: upload artifact (Linux aarch64)
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apios-linux-aarch64
+          path: target/aarch64-unknown-linux-musl/release/apios
           if-no-files-found: error
 
   # 跨平台类型检查：核心引擎必须能在非 macOS 目标上编译
