@@ -167,7 +167,12 @@ pub fn parse_apt_rdepends(output: &str) -> Vec<String> {
             if t.is_empty() {
                 continue;
             }
-            deps.push(t.to_string());
+            // or 型替代依赖输出 `  |pkgname` —— 剥 `|` 前缀，否则得到
+            // "|libxml2-utils" 假依赖名（2026-08-15 审查 P1-21）
+            let t = t.trim_start_matches('|').trim();
+            if !t.is_empty() {
+                deps.push(t.to_string());
+            }
         }
     }
     deps.sort_unstable();

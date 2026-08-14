@@ -26,7 +26,9 @@ const AUTOMATION_FLAGS: [&str; 2] = ["--accept-source-agreements", "--disable-in
 fn winget_candidates(path: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     for dir in path.split(';') {
-        if !dir.is_empty() {
+        // 只接受绝对路径段（相对段会生成 CWD 相对的 winget.exe 查找，
+        // 命中任意同目录二进制即执行 —— 对齐 homebrew 的防御，P1-15）
+        if !dir.is_empty() && Path::new(dir).is_absolute() {
             candidates.push(PathBuf::from(dir).join("winget.exe"));
         }
     }

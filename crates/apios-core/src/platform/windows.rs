@@ -190,13 +190,21 @@ impl Trash for WindowsAdapter {
         let failed: Vec<DeleteFailure> = urls
             .iter()
             .filter(|p| !moved_set.contains(*p))
-            .map(|p| DeleteFailure {
-                path: p.clone(),
-                // SHFileOperationW 批量调用无 per-file 错误码（只有 ok/aborted）；
-                // 统一归 Other，真机复测时再细化分类
-                reason: DeleteFailureReason::Other(
-                    "recycle bin operation failed (in use or denied)".into(),
-                ),
+            .map(|p| {
+                // 调用时已不存在的路径（recycle_batch 先滤掉）→ NotFound；
+                // 其余 SHFileOperationW 批量调用无 per-file 错误码（只有
+                // ok/aborted），统一归 Other（2026-08-15 审查 P1-14）
+                let reason = if !p.exists() {
+                    DeleteFailureReason::NotFound
+                } else {
+                    DeleteFailureReason::Other(
+                        "recycle bin operation failed (in use or denied)".into(),
+                    )
+                };
+                DeleteFailure {
+                    path: p.clone(),
+                    reason,
+                }
             })
             .collect();
         let moved: Vec<crate::trash::FilePair> = moved

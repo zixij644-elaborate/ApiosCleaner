@@ -26,9 +26,7 @@ pub struct MacOsAdapter {
 
 impl MacOsAdapter {
     pub fn new() -> Self {
-        let home = crate::platform::normalize_home(
-            &std::env::var("HOME").unwrap_or_else(|_| "/Users/".to_string()),
-        );
+        let home = crate::platform::normalize_home(&default_home());
         let (cache_dir, temp_dir) = darwin_ct();
         MacOsAdapter {
             home,
@@ -36,6 +34,29 @@ impl MacOsAdapter {
             temp_dir,
         }
     }
+}
+
+/// HOME 缺失时的用户目录来源（2026-08-15 审查 P1-8）：
+/// 优先 $HOME；否则 getpwuid 取真实用户 home（launchd/cron 无 HOME 上下文）；
+/// 仍失败 → 空串（路径表将指向根级——退化但至少不指向 /Users 扫他人目录）。
+fn default_home() -> String {
+    if let Ok(h) = std::env::var("HOME") {
+        if !h.is_empty() {
+            return h;
+        }
+    }
+    unsafe {
+        let pw = libc::getpwuid(libc::getuid());
+        if !pw.is_null() && !(*pw).pw_dir.is_null() {
+            let dir = std::ffi::CStr::from_ptr((*pw).pw_dir)
+                .to_string_lossy()
+                .into_owned();
+            if !dir.is_empty() {
+                return dir;
+            }
+        }
+    }
+    String::new()
 }
 
 /// getconf DARWIN_USER_CACHE_DIR / DARWIN_USER_TEMP_DIR
@@ -437,7 +458,11 @@ impl ProcessControl for MacOsAdapter {
     /// - `pgrep -x` 受 macOS 进程名 15 字符截断限制（长可执行名永远匹配不到）——
     ///   argv[0] 完整路径匹配不受此限。
     fn kill_running_app(&self, app: &AppInfo) -> u32 {
-        let prefix = format!("{}/", app.path.to_string_lossy());
+        // cask 安装的 .app 是符号链接（/Applications/Foo.app → Caskroom），
+        // 运行进程 argv[0] 是 resolve 后的真实路径 —— 先 canonicalize 再匹配，
+        // 否则 cask 应用永远匹配不到（2026-08-15 审查 P1-9）
+        let path = std::fs::canonicalize(&app.path).unwrap_or_else(|_| app.path.clone());
+        let prefix = format!("{}/", path.to_string_lossy());
         let running = running_bundle_pids(&prefix);
         if running.is_empty() {
             return 0;
@@ -767,8 +792,10 @@ impl SpotlightIndex for MacOsAdapter {
         };
 
         // mdfind 毫秒级完成；索引重建时可能挂起 → 原版 5s 超时语义。
-        // 实现：spawn 子进程 + try_wait 轮询（不用脱离线程 —— 原版线程 + recv_timeout
-        // 超时后线程与 mdfind 进程继续泄漏）；超时 kill + wait 回收。
+        // 实现：spawn 子进程 + try_wait 轮询（不用脱离线程 —— 原版线程 +
+        // recv_timeout 超时后线程与 mdfind 进程继续泄漏）；超时 kill + wait 回收。
+        // **读 stdout 放独立线程**：管道满（>16KB 结果）时 mdfind 阻塞写管道，
+        // 若先等退出再读会死等到超时 → 大结果集静默丢失（2026-08-15 审查 P1-7）。
         let mut child = match Command::new("mdfind")
             .args(["-onlyin", &self.home, &predicate])
             .stdout(std::process::Stdio::piped())
@@ -777,13 +804,26 @@ impl SpotlightIndex for MacOsAdapter {
             Ok(c) => c,
             Err(_) => return Vec::new(),
         };
+        let stdout_handle = child.stdout.take().map(|out| {
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut out = out;
+                let mut buf = String::new();
+                let _ = out.read_to_string(&mut buf);
+                buf
+            })
+        });
         let start = std::time::Instant::now();
         let mut status: Option<std::process::ExitStatus> = None;
         while status.is_none() && start.elapsed() < Duration::from_secs(5) {
             match child.try_wait() {
                 Ok(Some(s)) => status = Some(s),
                 Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-                Err(_) => return Vec::new(),
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Vec::new();
+                }
             }
         }
         let Some(status) = status else {
@@ -791,16 +831,11 @@ impl SpotlightIndex for MacOsAdapter {
             let _ = child.wait();
             return Vec::new();
         };
+        // 子进程已退出 → 管道 EOF → 读线程必然结束；join 取结果
+        let stdout = stdout_handle
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
         if !status.success() {
-            return Vec::new();
-        }
-
-        let mut stdout = String::new();
-        let read_ok = match child.stdout.take() {
-            Some(mut o) => std::io::Read::read_to_string(&mut o, &mut stdout).is_ok(),
-            None => false,
-        };
-        if !read_ok {
             return Vec::new();
         }
         let paths: Vec<PathBuf> = stdout
