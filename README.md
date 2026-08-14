@@ -92,6 +92,9 @@ ask for confirmation (`y/N`, default no); pass `-y` to skip it (for
 scripting or GUI/automation integration).
 
 ```sh
+# List installed apps found by discovery (read-only)
+apios apps
+
 # List all related files of an app (read-only)
 apios list /Applications/SomeApp.app
 apios list SomeApp

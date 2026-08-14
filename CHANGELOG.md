@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`apios apps`** — list installed apps found by discovery (read-only):
+  macOS `.app` bundles, Windows registry uninstall entries + Start Menu
+  `.lnk`, Linux `.desktop` files. The help text states the coverage
+  explicitly (portable/unregistered apps are not listed). Useful as an
+  overview and to pick an app for `list` / `uninstall`.
+
 ### Fixed
 
 - **Deletion failures are classified and reported per file** — the previous

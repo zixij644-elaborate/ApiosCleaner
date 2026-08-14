@@ -1,6 +1,7 @@
 //! apios：ApiosCleaner 命令行工具（命令参数式）
 //!
 //! 用法：
+//!   apios apps                列出发现机制能找到的已装应用（只读）
 //!   apios list <app>         列出应用相关文件（只读，不删除）
 //!   apios uninstall <app>    卸载：应用本体 + 全部相关文件 → 回收站（交互确认；
 //!                             --except PATH 跳过匹配路径，可重复）
@@ -123,6 +124,21 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// List installed apps found by discovery (read-only)
+    #[command(
+        long_about = "List every installed app that discovery finds (read-only).\n\n\
+The list is what the platform discovery mechanism can see — it does not \
+promise every binary on disk:\n  \
+• macOS — .app bundles in the default application folders\n  \
+• Windows — registry uninstall entries + Start Menu .lnk (portable apps \
+without registration are not listed)\n  \
+• Linux — .desktop files in the XDG application directories\n\n\
+Useful as an overview and to pick an app for `apios list` / `uninstall`.",
+        after_long_help = "EXAMPLES:\n  \
+apios apps\n  \
+apios apps | head"
+    )]
+    Apps,
     /// List all related files of an app (read-only)
     #[command(
         long_about = "List every file an app owns outside its bundle: caches, preferences, saved \
@@ -391,6 +407,7 @@ fn main() {
     set_console_utf8();
     let cli = Cli::parse();
     match cli.command {
+        Command::Apps => cmd_apps(&cli),
         Command::List { ref app } => cmd_list(&cli, app),
         Command::Uninstall {
             ref app,
@@ -717,6 +734,27 @@ fn report_blocked(blocked: &[PathBuf]) {
 }
 
 // ---------- 命令实现 ----------
+
+/// `apios apps`：列出发现机制能找到的已装应用（跨平台统一走 AppDiscovery）。
+/// 输出：应用名 + 路径，按名称排序（发现层已排序），末尾统计。
+fn cmd_apps(cli: &Cli) {
+    let _ = cli;
+    let apps = apios_core::platform::adapter().discover_installed_apps();
+    let width = apps
+        .iter()
+        .map(|a| a.app_name.chars().count())
+        .max()
+        .unwrap_or(0);
+    for app in &apps {
+        println!(
+            "{:width$}  {}",
+            app.app_name,
+            app.path.display(),
+            width = width
+        );
+    }
+    println!("\n{} application(s) found by discovery.", apps.len());
+}
 
 /// `--except` 过滤：剔除等于或位于指定路径之下的条目（except 是目录时整目录
 /// 排除）。支持 `~` 展开；词法比较（不 resolve 符号链接，避免删除目标语义漂移）。

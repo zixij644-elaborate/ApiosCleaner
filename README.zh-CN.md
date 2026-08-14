@@ -84,6 +84,9 @@ Recycle Bin API 按用户运行。
 （`y/N`，默认为否）；传 `-y` 跳过确认（用于脚本或 GUI/自动化集成）。
 
 ```sh
+# 列出发现机制能找到的已装应用（只读）
+apios apps
+
 # 列出应用的所有关联文件（只读）
 apios list /Applications/SomeApp.app
 apios list SomeApp
