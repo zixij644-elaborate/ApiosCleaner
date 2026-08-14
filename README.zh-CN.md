@@ -45,8 +45,10 @@
 下载最新版本，解压后加入 PATH：
 
 ```sh
-unzip apios-v0.2.0-macos-universal.zip -d ~/bin
-# 通用二进制：同时支持 Apple Silicon (arm64) 和 Intel (x86_64)
+# macOS：按芯片选择 zip —— Apple Silicon (arm64) 或 Intel (x86_64)
+unzip apios-macos-arm64.zip -d ~/bin        # 或 apios-macos-x86_64.zip
+# Linux：apios-linux-x86_64 / apios-linux-aarch64（静态链接）
+# Windows：apios-windows-x86_64（zip 内含 apios.exe）
 ```
 
 > ⚠️ macOS Gatekeeper：二进制为 ad-hoc 签名；首次从下载的 zip 中运行时，

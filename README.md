@@ -50,8 +50,10 @@ independently — see [Beyond a straight port](CHANGELOG.md#beyond-a-straight-po
 then unzip and add it to your PATH:
 
 ```sh
-unzip apios-v0.2.0-macos-universal.zip -d ~/bin
-# universal binary: Apple Silicon (arm64) and Intel (x86_64)
+# macOS: pick the zip for your chip — Apple Silicon (arm64) or Intel (x86_64)
+unzip apios-macos-arm64.zip -d ~/bin        # or apios-macos-x86_64.zip
+# Linux: apios-linux-x86_64 / apios-linux-aarch64 (statically linked)
+# Windows: apios-windows-x86_64 (zip with apios.exe)
 ```
 
 > ⚠️ macOS Gatekeeper: the binary is ad-hoc signed; the first run from a
