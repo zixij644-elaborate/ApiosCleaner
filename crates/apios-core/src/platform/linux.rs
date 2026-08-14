@@ -28,7 +28,7 @@ use crate::dev_env::DevEnv;
 use crate::model::{AppInfo, Sensitivity};
 use crate::plugin::PluginCategory;
 use crate::trash::xdg;
-use crate::trash::{validate_path, DeleteResult, FilePair};
+use crate::trash::{validate_path, DeleteFailure, DeleteFailureReason, DeleteResult, FilePair};
 
 pub struct LinuxAdapter {
     home: String,
@@ -139,9 +139,17 @@ impl Trash for LinuxAdapter {
         let info_dir = trash.join("info");
         let mut moved: Vec<FilePair> = Vec::new();
         let mut blocked: Vec<PathBuf> = Vec::new();
-        let mut failed: Vec<PathBuf> = Vec::new();
+        let mut failed: Vec<DeleteFailure> = Vec::new();
         // 首次使用时创建 files/ 与 info/（失败 → 全部 failed，语义同
         // move_to_trash_dir 的 create_dir_all 失败路径）
+        let trash_unavailable = |urls: &[PathBuf]| -> Vec<DeleteFailure> {
+            urls.iter()
+                .map(|p| DeleteFailure {
+                    path: p.clone(),
+                    reason: DeleteFailureReason::TrashUnavailable,
+                })
+                .collect()
+        };
         if let Err(e) = std::fs::create_dir_all(&files_dir) {
             eprintln!(
                 "apios: cannot create trash dir {}: {e}",
@@ -152,7 +160,7 @@ impl Trash for LinuxAdapter {
                 bundle_folder: files_dir,
                 moved,
                 blocked,
-                failed: urls.to_vec(),
+                failed: trash_unavailable(urls),
             };
         }
         if let Err(e) = std::fs::create_dir_all(&info_dir) {
@@ -165,7 +173,7 @@ impl Trash for LinuxAdapter {
                 bundle_folder: files_dir,
                 moved,
                 blocked,
-                failed: urls.to_vec(),
+                failed: trash_unavailable(urls),
             };
         }
         for url in urls {
@@ -175,20 +183,26 @@ impl Trash for LinuxAdapter {
                 continue;
             }
             let Some(name) = url.file_name().map(|n| n.to_string_lossy().into_owned()) else {
-                failed.push(url.clone());
+                failed.push(DeleteFailure {
+                    path: url.clone(),
+                    reason: DeleteFailureReason::Other("no file name".into()),
+                });
                 continue;
             };
             // files/ 目标（同名冲突加序号）—— info 名与之一致
             let target = xdg::unique_name(&files_dir, &name);
             let Some(target_name) = target.file_name().map(|n| n.to_string_lossy().into_owned())
             else {
-                failed.push(url.clone());
+                failed.push(DeleteFailure {
+                    path: url.clone(),
+                    reason: DeleteFailureReason::Other("no target name".into()),
+                });
                 continue;
             };
             // 移动（跨卷 EXDEV 在此失败，挂载点 TODO 处理）
             if let Err(e) = std::fs::rename(url, &target) {
                 eprintln!("apios: move to trash failed for {}: {e}", url.display());
-                failed.push(url.clone());
+                failed.push(DeleteFailure::from_io_error(url.clone(), &e));
                 continue;
             }
             // 写 trashinfo（失败 → 回滚，避免无法恢复的孤儿条目）
@@ -203,7 +217,7 @@ impl Trash for LinuxAdapter {
                     "apios: failed to write trashinfo for {}: {e}",
                     url.display()
                 );
-                failed.push(url.clone());
+                failed.push(DeleteFailure::from_io_error(url.clone(), &e));
                 continue;
             }
             moved.push(FilePair {

@@ -51,6 +51,53 @@ pub struct FilePair {
     pub original_path: PathBuf,
 }
 
+/// 删除失败原因分类（参照 BleachBit 错误分类思路，仅思想层：
+/// 明确的错误类别 + 针对性指引，而非笼统 "failed"）
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeleteFailureReason {
+    /// 文件不存在（已被删 / 并发删除）
+    NotFound,
+    /// 权限拒绝（root 所有 / macOS 沙盒容器 / 系统保护）—— 提示 sudo
+    PermissionDenied,
+    /// 文件被占用（正在使用；Windows sharing violation）
+    InUse,
+    /// 回收站不可用（归档目录建不起来）
+    TrashUnavailable,
+    /// 其他（含跨设备回退失败）
+    Other(String),
+}
+
+/// 删除失败条目：路径 + 原因
+#[derive(Clone, Debug)]
+pub struct DeleteFailure {
+    pub path: PathBuf,
+    pub reason: DeleteFailureReason,
+}
+
+impl DeleteFailure {
+    /// 从 io::Error 分类（rename/copy 等 POSIX 路径）
+    pub fn from_io_error(path: PathBuf, e: &std::io::Error) -> Self {
+        let reason = match e.kind() {
+            std::io::ErrorKind::NotFound => DeleteFailureReason::NotFound,
+            std::io::ErrorKind::PermissionDenied => DeleteFailureReason::PermissionDenied,
+            _ => {
+                // Windows sharing violation（os error 32）→ 占用
+                #[cfg(windows)]
+                if e.raw_os_error() == Some(32) {
+                    DeleteFailureReason::InUse
+                } else {
+                    DeleteFailureReason::Other(e.to_string())
+                }
+                #[cfg(not(windows))]
+                {
+                    DeleteFailureReason::Other(e.to_string())
+                }
+            }
+        };
+        DeleteFailure { path, reason }
+    }
+}
+
 /// 删除结果
 #[derive(Debug)]
 pub struct DeleteResult {
@@ -58,7 +105,7 @@ pub struct DeleteResult {
     pub bundle_folder: PathBuf,
     pub moved: Vec<FilePair>,
     pub blocked: Vec<PathBuf>,
-    pub failed: Vec<PathBuf>,
+    pub failed: Vec<DeleteFailure>,
 }
 
 /// 词法归一化绝对路径：折叠 `.`/`..`、合并重复分隔符、去掉尾部斜杠。
@@ -206,8 +253,15 @@ pub fn move_to_trash_dir(
     // 建目录 + 逐文件移动（重名后缀）
     if std::fs::create_dir_all(&bundle_folder).is_err() {
         // 归档目录建不起来 = 整个操作失败（回收站不可用/权限）。此前返回全空
-        // 结果会被 main.rs 误判为 "Nothing to delete" 而 exit 0 —— 实际什么都没删
-        result.failed = urls.to_vec();
+        // 结果会被 main.rs 误判为 "Nothing to delete" 而 exit 0 —— 实际什么都没删。
+        // 分类为 TrashUnavailable，CLI 可针对性提示
+        result.failed = urls
+            .iter()
+            .map(|p| DeleteFailure {
+                path: p.clone(),
+                reason: DeleteFailureReason::TrashUnavailable,
+            })
+            .collect();
         return result;
     }
 
@@ -248,10 +302,14 @@ pub fn move_to_trash_dir(
                         original_path: file.clone(),
                     });
                 } else {
-                    result.failed.push(file.clone());
+                    result
+                        .failed
+                        .push(DeleteFailure::from_io_error(file.clone(), &e));
                 }
             }
-            Err(_) => result.failed.push(file.clone()),
+            Err(e) => result
+                .failed
+                .push(DeleteFailure::from_io_error(file.clone(), &e)),
         }
     }
 
@@ -329,6 +387,31 @@ mod tests {
             blocked: vec![],
             failed: vec![],
         }
+    }
+
+    #[test]
+    fn test_delete_failure_classification() {
+        use std::io;
+        // NotFound / PermissionDenied / Other 三分支
+        let nf = DeleteFailure::from_io_error(
+            PathBuf::from("/a"),
+            &io::Error::from(io::ErrorKind::NotFound),
+        );
+        assert_eq!(nf.reason, DeleteFailureReason::NotFound);
+        let pd = DeleteFailure::from_io_error(
+            PathBuf::from("/b"),
+            &io::Error::from(io::ErrorKind::PermissionDenied),
+        );
+        assert_eq!(pd.reason, DeleteFailureReason::PermissionDenied);
+        let other = DeleteFailure::from_io_error(PathBuf::from("/c"), &io::Error::other("boom"));
+        assert_eq!(other.reason, DeleteFailureReason::Other("boom".into()));
+        // Windows sharing violation（os error 32）→ InUse；POSIX 上 32 归 Other
+        let e32 = io::Error::from_raw_os_error(32);
+        let r32 = DeleteFailure::from_io_error(PathBuf::from("/d"), &e32);
+        #[cfg(windows)]
+        assert_eq!(r32.reason, DeleteFailureReason::InUse);
+        #[cfg(not(windows))]
+        assert!(matches!(r32.reason, DeleteFailureReason::Other(_)));
     }
 
     #[test]

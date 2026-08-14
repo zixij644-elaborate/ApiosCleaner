@@ -49,7 +49,7 @@ use apios_core::scan::find_app_by_path;
 #[cfg(target_os = "macos")]
 use apios_core::scan::get_sorted_apps;
 use apios_core::search::AppPathFinder;
-use apios_core::trash::{delete_files, is_writable};
+use apios_core::trash::{delete_files, is_writable, DeleteFailure, DeleteFailureReason};
 use clap::{Parser, Subcommand};
 
 /// 回收站文案（Windows 无 Trash 归档目录概念，系统回收站叫 Recycle Bin）
@@ -653,6 +653,43 @@ fn confirm(cli: &Cli, prompt: &str) -> bool {
 
 // ---------- 受保护文件 ----------
 
+/// 失败报告（P0 重构）：分类输出 + sudo 指引，替代笼统 "failed to delete N"。
+/// 分类参照 BleachBit 错误分类思路（仅思想层）。
+fn report_failures(failed: &[DeleteFailure]) {
+    if failed.is_empty() {
+        return;
+    }
+    eprintln!("Failed to delete {} file(s):", failed.len());
+    for f in failed {
+        match &f.reason {
+            DeleteFailureReason::NotFound => {
+                eprintln!("  {} — not found", f.path.display());
+            }
+            DeleteFailureReason::PermissionDenied => {
+                eprintln!(
+                    "  {} — permission denied (root-owned or system-protected)",
+                    f.path.display()
+                );
+            }
+            DeleteFailureReason::InUse => {
+                eprintln!("  {} — in use", f.path.display());
+            }
+            DeleteFailureReason::TrashUnavailable => {
+                eprintln!("  {} — trash unavailable", f.path.display());
+            }
+            DeleteFailureReason::Other(msg) => {
+                eprintln!("  {} — {msg}", f.path.display());
+            }
+        }
+    }
+    if failed
+        .iter()
+        .any(|f| f.reason == DeleteFailureReason::PermissionDenied)
+    {
+        eprintln!("Hint: re-run with sudo to delete protected files.");
+    }
+}
+
 /// 列出不可写（需 sudo）的文件；有则提示并以退出码 1 结束
 fn check_protected(files: &[PathBuf], hint: &str) {
     let protected: Vec<&PathBuf> = files.iter().filter(|p| !is_writable(p)).collect();
@@ -757,10 +794,7 @@ fn cmd_uninstall(cli: &Cli, arg: &str, except: &[String]) {
             deleted_message(result.moved.len(), &result.bundle_folder)
         );
         if !result.failed.is_empty() {
-            eprintln!(
-                "Failed to delete {} files (in use or protected).",
-                result.failed.len()
-            );
+            report_failures(&result.failed);
         }
         exit(0);
     } else if result.moved.is_empty() && result.failed.is_empty() {
@@ -769,12 +803,9 @@ fn cmd_uninstall(cli: &Cli, arg: &str, except: &[String]) {
         println!("Nothing to delete.");
         exit(0);
     } else {
-        // 全部或部分失败：文件占用 / 受保护 / 回收站归档目录建不起来
-        // （move_to_trash_dir 在 create_dir_all 失败时把全部文件记入 failed）
-        eprintln!(
-            "\napios: failed to delete {} file(s) (in use, protected, or trash unavailable).",
-            result.failed.len()
-        );
+        // 全部或部分失败：逐项分类报告（原因 + sudo 指引）
+        eprintln!();
+        report_failures(&result.failed);
         exit(1);
     }
 }
@@ -854,10 +885,7 @@ fn cmd_dev_clean(cli: &Cli, env: Option<&str>) {
             deleted_message(result.moved.len(), &result.bundle_folder)
         );
         if !result.failed.is_empty() {
-            eprintln!(
-                "Failed to delete {} files (in use or protected).",
-                result.failed.len()
-            );
+            report_failures(&result.failed);
         }
         exit(0);
     } else if result.moved.is_empty() && result.failed.is_empty() {
@@ -866,7 +894,8 @@ fn cmd_dev_clean(cli: &Cli, env: Option<&str>) {
         println!("Nothing to delete.");
         exit(0);
     } else {
-        eprintln!("\napios: failed to delete files ({}).", env.name);
+        eprintln!();
+        report_failures(&result.failed);
         exit(1);
     }
 }
@@ -1149,7 +1178,7 @@ fn cmd_plugins(cli: &Cli, category: Option<&str>, clean: Option<&str>) {
             );
         }
         if !result.failed.is_empty() {
-            eprintln!("apios: {} file(s) could not be moved", result.failed.len());
+            report_failures(&result.failed);
             exit(1);
         }
         return;
@@ -1568,13 +1597,7 @@ fn cmd_clean_orphan(cli: &Cli, except: &[String]) {
             deleted_message(result.moved.len(), &result.bundle_folder)
         );
         if !result.failed.is_empty() {
-            eprintln!(
-                "Failed to delete {} files (in use or protected).",
-                result.failed.len()
-            );
-            eprintln!(
-                "Hint: re-run with sudo to delete protected files (sudo apios clean-orphan)."
-            );
+            report_failures(&result.failed);
         }
         exit(0);
     } else if result.moved.is_empty() && result.failed.is_empty() {
@@ -1583,7 +1606,8 @@ fn cmd_clean_orphan(cli: &Cli, except: &[String]) {
         println!("Nothing to delete.");
         exit(0);
     } else {
-        eprintln!("\napios: failed to delete orphaned files.");
+        eprintln!();
+        report_failures(&result.failed);
         exit(1);
     }
 }

@@ -22,6 +22,7 @@ use super::{
 use crate::dev_env::DevEnv;
 use crate::model::{AppInfo, Sensitivity};
 use crate::plugin::PluginCategory;
+use crate::trash::{DeleteFailure, DeleteFailureReason};
 
 /// 环境变量 → 值（缺失回退默认）。`%VAR%` 类变量名直接传原名。
 fn env(name: &str, fallback: &str) -> String {
@@ -186,10 +187,17 @@ impl Trash for WindowsAdapter {
     ) -> crate::trash::DeleteResult {
         let moved = super::win_trash::recycle_batch(urls);
         let moved_set: std::collections::HashSet<PathBuf> = moved.iter().cloned().collect();
-        let failed: Vec<PathBuf> = urls
+        let failed: Vec<DeleteFailure> = urls
             .iter()
             .filter(|p| !moved_set.contains(*p))
-            .cloned()
+            .map(|p| DeleteFailure {
+                path: p.clone(),
+                // SHFileOperationW 批量调用无 per-file 错误码（只有 ok/aborted）；
+                // 统一归 Other，真机复测时再细化分类
+                reason: DeleteFailureReason::Other(
+                    "recycle bin operation failed (in use or denied)".into(),
+                ),
+            })
             .collect();
         let moved: Vec<crate::trash::FilePair> = moved
             .into_iter()

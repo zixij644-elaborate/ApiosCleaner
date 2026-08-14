@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Deletion failures are classified and reported per file** — the previous
+  "failed to delete N file(s)" gave no reason. Each failed path now reports
+  its cause (not found / permission denied with a sudo hint / in use /
+  trash unavailable / other), mirroring BleachBit's error-classification
+  approach. Covers uninstall, dev-clean, plugins and clean-orphan; verified
+  on a real macOS run where system-protected apps and sandbox containers
+  now explain themselves.
+
 ## [0.2.1] - 2026-08-14
 
 ### Added
