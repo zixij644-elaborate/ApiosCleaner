@@ -145,7 +145,7 @@ pub fn entry_from_values(
         match *ty {
             REG_EXPAND_SZ => Some(expand_env(&s)),
             REG_SZ => Some(s), // 原样（不展开）
-            _ => Some(s),
+            _ => None, // 非字符串类型（REG_DWORD 等）不按 UTF-16 解析
         }
     };
     let display_name = get("DisplayName").filter(|n| !n.is_empty())?;

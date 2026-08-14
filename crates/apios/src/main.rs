@@ -486,7 +486,7 @@ fn discover_apps_cached() -> Vec<AppInfo> {
     if guard.is_none() {
         *guard = Some(apios_core::platform::adapter().discover_installed_apps());
     }
-    guard.as_ref().unwrap().clone()
+    guard.as_ref().expect("cache was just initialized").clone()
 }
 
 /// 参数是路径形式（含目录分隔或带 .app 后缀）？

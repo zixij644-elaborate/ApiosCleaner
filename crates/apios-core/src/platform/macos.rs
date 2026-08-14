@@ -741,7 +741,8 @@ impl AppDiscovery for MacOsAdapter {
 
 /// NSPredicate 字符串转义：单引号 → ''（SQL 风格，Spotlight 查询语法）
 fn escape_predicate_value(value: &str) -> String {
-    value.replace('\'', "''")
+    // 先转义反斜杠（NSPredicate 字符串里 \ 是转义字符），再转义单引号
+    value.replace('\\', "\\\\").replace('\'', "''")
 }
 
 /// Strict/Enhanced 谓词。
@@ -869,6 +870,7 @@ mod tests {
         assert_eq!(escape_predicate_value("Microsoft Edge"), "Microsoft Edge");
         assert_eq!(escape_predicate_value("It's"), "It''s");
         assert_eq!(escape_predicate_value("a'b'c"), "a''b''c");
+        assert_eq!(escape_predicate_value(r"Foo\Bar"), r"Foo\\Bar");
     }
 
     #[test]

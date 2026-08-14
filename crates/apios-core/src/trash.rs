@@ -1,4 +1,4 @@
-//! 回收站删除 + 撤销 —— mv-bundle 语义（时间戳归档目录 + 重名后缀 + 可还原）
+//! 回收站删除 + 撤销 —— mv-bundle 语义（时间戳归档目录 + 重名后缀，可手动从归档恢复）
 //!
 //! 语义要点：
 //! - 在回收站目录（平台适配层，macOS 为 ~/.Trash）下创建 `<App名>_<yyyy-MM-dd_HH-mm-ss>` 归档目录
@@ -344,7 +344,8 @@ pub fn delete_files(urls: &[PathBuf], bundle_name: Option<&str>) -> DeleteResult
     result
 }
 
-/// 撤销：从回收站移回原位 + 移除归档目录（restoreFiles 简化版）
+/// 撤销：从回收站移回原位 + 移除归档目录（restoreFiles 简化版）。
+/// 注意：CLI 暂未暴露 restore 命令，此函数当前仅被单元测试调用。
 pub fn restore_files(file_pairs: &[FilePair]) -> bool {
     let mut all_ok = true;
     for pair in file_pairs {

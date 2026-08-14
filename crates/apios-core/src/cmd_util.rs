@@ -79,7 +79,7 @@ pub fn parse_freed_bytes(output: &str, regex: &str) -> u64 {
     let Some(num) = caps.get(1) else {
         return 0;
     };
-    let Ok(value) = num.as_str().parse::<f64>() else {
+    let Ok(value) = num.as_str().replace(',', "").parse::<f64>() else {
         return 0;
     };
     // 单位后缀：数字之后紧跟 K/M/G/T（可选 i）+ B，如 "2,120 kB" / "1.5 GiB"
@@ -142,8 +142,8 @@ mod tests {
 
     #[test]
     fn test_parse_freed_bytes_plain_number() {
-        // 千分位逗号（"2,120"）无法 parse → 0（文档化：仅支持纯数字/小数）
-        assert_eq!(parse_freed_bytes("2,120 kB", r"(\d+[\d,]*)\s*kB"), 0);
+        // 千分位逗号（"2,120"）剥离后解析
+        assert_eq!(parse_freed_bytes("2,120 kB", r"(\d+[\d,]*)\s*kB"), 2_170_880);
         assert_eq!(parse_freed_bytes("2 kB", r"(\d+)\s*kB"), 2048);
     }
 
